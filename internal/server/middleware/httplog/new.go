@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/anyshake/observer/pkg/logger"
 	"github.com/gin-gonic/gin"
-	"github.com/sirupsen/logrus"
 )
 
-func New(logger logrus.FieldLogger, notLogged ...string) gin.HandlerFunc {
+func New(logger *logger.Adapter, notLogged ...string) gin.HandlerFunc {
 	var skip map[string]struct{}
 
 	if length := len(notLogged); length > 0 {
@@ -36,15 +36,15 @@ func New(logger logrus.FieldLogger, notLogged ...string) gin.HandlerFunc {
 		}
 
 		if len(c.Errors) > 0 {
-			logger.Error(c.Errors.ByType(gin.ErrorTypePrivate).String())
+			logger.Errorln(c.Errors.ByType(gin.ErrorTypePrivate).String())
 		} else {
 			msg := fmt.Sprintf("%s - \"%s %s\" %d \"%s\" (%d ms)", clientIP, c.Request.Method, path, statusCode, clientUserAgent, latency)
 			if statusCode >= http.StatusInternalServerError {
-				logger.Error(msg)
+				logger.Errorln(msg)
 			} else if statusCode >= http.StatusBadRequest {
-				logger.Warn(msg)
+				logger.Warnln(msg)
 			} else {
-				logger.Info(msg)
+				logger.Infoln(msg)
 			}
 		}
 	}

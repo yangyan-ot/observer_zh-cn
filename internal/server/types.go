@@ -5,8 +5,8 @@ import (
 	"time"
 
 	graph_resolver "github.com/anyshake/observer/internal/server/router/graph"
+	"github.com/anyshake/observer/pkg/logger"
 	"github.com/gin-gonic/gin"
-	"github.com/sirupsen/logrus"
 )
 
 const AUTH_TIMEOUT = 24 * time.Hour
@@ -16,7 +16,7 @@ type HttpServer struct {
 	cors  bool
 
 	resolver *graph_resolver.Resolver
-	log      *logrus.Entry
+	log      *logger.Adapter
 	engine   *gin.Engine
 	server   http.Server
 }

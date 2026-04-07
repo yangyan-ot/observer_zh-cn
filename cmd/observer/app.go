@@ -73,7 +73,7 @@ func appStart(ver *semver.Version, build *unibuild.UniBuild, args arguments) {
 	if err := conf.Migrate(logger.GetLogger(main)); err != nil {
 		logger.GetLogger(main).Fatalln(err)
 	}
-	logger.GetLogger(main).Info("global configuration has been loaded")
+	logger.GetLogger(main).Infoln("global configuration has been loaded")
 
 	if conf.Server.Debug {
 		go func() {
@@ -114,7 +114,7 @@ func appStart(ver *semver.Version, build *unibuild.UniBuild, args arguments) {
 	if err = daoObj.Open(conf.Database.Database); err != nil {
 		logger.GetLogger(main).Fatalln(err)
 	}
-	logger.GetLogger(main).Info("database connection has been established")
+	logger.GetLogger(main).Infoln("database connection has been established")
 
 	if err = daoObj.AutoMigrate(
 		&model.SchemaVersion{},
@@ -124,7 +124,7 @@ func appStart(ver *semver.Version, build *unibuild.UniBuild, args arguments) {
 	); err != nil {
 		logger.GetLogger(main).Fatalln(err)
 	}
-	logger.GetLogger(main).Info("database schema has been configured")
+	logger.GetLogger(main).Infoln("database schema has been configured")
 	actionHandler := action.NewHandler(daoObj)
 
 	var hardwareDevice hardware.IHardware
@@ -314,9 +314,9 @@ func appStart(ver *semver.Version, build *unibuild.UniBuild, args arguments) {
 		sendHardwareAbortSignal()
 		runCleanerTasks()
 		if warn {
-			logger.GetLogger(main).Warn(reason)
+			logger.GetLogger(main).Warnln(reason)
 		} else {
-			logger.GetLogger(main).Info(reason)
+			logger.GetLogger(main).Infoln(reason)
 		}
 		if callback != nil {
 			callback()

@@ -6,8 +6,8 @@ import (
 
 func (p *CloseExplorerCleanerImpl) Execute() error {
 	if p.HardwareDev != nil {
-		logger.GetLogger(p.GetName()).Info("closing connection to hardware")
-		defer logger.GetLogger(p.GetName()).Info("hardware connection has been closed")
+		logger.GetLogger(p.GetName()).Infoln("closing connection to hardware")
+		defer logger.GetLogger(p.GetName()).Infoln("hardware connection has been closed")
 		return p.HardwareDev.Close()
 	}
 

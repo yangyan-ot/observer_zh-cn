@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 
 import { ErrorPage } from '../../components/ui/ErrorPage';
 import { CodeBlock } from '../../components/widget/CodeBlock';
-import { useGetApplicationLogsQuery } from '../../graphql';
 import { SettingsConstraints } from '../../config/constraints';
+import { useGetApplicationLogsQuery } from '../../graphql';
 
 export const Logs = () => {
     const {
@@ -19,7 +19,7 @@ export const Logs = () => {
                 getApplicationLogsData?.getApplicationLogs
                     ?.map((line) => {
                         const logObj = JSON.parse(line);
-                        return `${logObj.time} - [${logObj.level}] - [${logObj.module}] - ${logObj.msg}`;
+                        return `${logObj.time} - [${logObj.level}] - [${logObj.module}] - ${logObj.message}`;
                     })
                     .reverse()
                     .join('\n')

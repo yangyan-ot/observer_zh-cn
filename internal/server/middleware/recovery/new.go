@@ -5,11 +5,11 @@ import (
 	"runtime/debug"
 
 	"github.com/anyshake/observer/internal/server/response"
+	"github.com/anyshake/observer/pkg/logger"
 	"github.com/gin-gonic/gin"
-	"github.com/sirupsen/logrus"
 )
 
-func New(logger *logrus.Logger) gin.HandlerFunc {
+func New(logger *logger.Adapter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
 			if r := recover(); r != nil {

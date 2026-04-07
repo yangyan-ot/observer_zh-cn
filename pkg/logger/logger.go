@@ -5,14 +5,16 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
 )
 
-func GetLogger(x any) *logrus.Entry {
+const moduleKey = "module"
+
+func GetLogger(x any) *Adapter {
 	if v, ok := x.(string); ok {
-		return logrus.WithFields(logrus.Fields{
-			"module": strings.ToLower(v),
-		})
+		return &Adapter{
+			Logger: log.Logger.With().Str(moduleKey, strings.ToLower(v)).Logger(),
+		}
 	}
 
 	val := reflect.ValueOf(x)
@@ -24,15 +26,15 @@ func GetLogger(x any) *logrus.Entry {
 				lastPart := moduleNames[len(moduleNames)-1]
 				moduleName := strings.Split(lastPart, "/")
 				if len(moduleName) > 0 {
-					return logrus.WithFields(logrus.Fields{
-						"module": strings.ToLower(moduleName[len(moduleName)-1]),
-					})
+					return &Adapter{
+						Logger: log.Logger.With().Str(moduleKey, strings.ToLower(moduleName[len(moduleName)-1])).Logger(),
+					}
 				}
 			}
 		}
 	}
 
-	return logrus.WithFields(logrus.Fields{
-		"module": "unknown",
-	})
+	return &Adapter{
+		Logger: log.Logger.With().Str(moduleKey, "unknown").Logger(),
+	}
 }

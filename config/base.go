@@ -3,8 +3,8 @@ package config
 import (
 	"fmt"
 
+	_logger "github.com/anyshake/observer/pkg/logger"
 	"github.com/go-playground/validator/v10"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
 
@@ -81,7 +81,7 @@ func (c *BaseConfig) Parse(configPath, configType string) error {
 	return nil
 }
 
-func (cfg *BaseConfig) Migrate(logger *logrus.Entry) error {
+func (cfg *BaseConfig) Migrate(logger *_logger.Adapter) error {
 	// 2025-08-22: starting from v4.2.0, NTP Client configuration has deprecated the `endpoint` field.
 	if cfg.NtpClient.Endpoint != "" && len(cfg.NtpClient.Pool) == 0 {
 		cfg.NtpClient.Pool = []string{cfg.NtpClient.Endpoint}

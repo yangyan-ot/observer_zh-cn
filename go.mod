@@ -7,7 +7,6 @@ require (
 	github.com/PuerkitoBio/goquery v1.10.3
 	github.com/alphadose/haxmap v1.4.1
 	github.com/ameshkov/dnscrypt/v2 v2.4.0
-	github.com/antonfisher/nested-logrus-formatter v1.3.1
 	github.com/appleboy/gin-jwt/v2 v2.10.1
 	github.com/bclswl0827/eewgo v0.1.0
 	github.com/bclswl0827/go-serial v0.0.1
@@ -41,10 +40,10 @@ require (
 	github.com/miekg/dns v1.1.65
 	github.com/ncruces/go-sqlite3 v0.24.0
 	github.com/ncruces/go-sqlite3/gormlite v0.24.0
+	github.com/rs/zerolog v1.35.0
 	github.com/samber/lo v1.51.0
 	github.com/sbabiv/xml2map v1.2.1
 	github.com/shirou/gopsutil/v4 v4.25.1
-	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/viper v1.19.0
 	github.com/vardius/message-bus v1.1.5
 	github.com/vektah/gqlparser/v2 v2.5.30
@@ -134,6 +133,7 @@ require (
 	github.com/longbridgeapp/sqlparser v0.3.1 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect

@@ -3,24 +3,30 @@ package logger
 import (
 	"errors"
 
-	"github.com/sirupsen/logrus"
+	"github.com/rs/zerolog"
+)
+
+type LogLevel int
+
+const (
+	INFO LogLevel = iota
+	WARN
+	ERROR
+	FATAL
 )
 
 func SetLevel(level LogLevel) error {
 	switch level {
 	case INFO:
-		logrus.SetLevel(logrus.InfoLevel)
-		return nil
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	case WARN:
-		logrus.SetLevel(logrus.WarnLevel)
-		return nil
+		zerolog.SetGlobalLevel(zerolog.WarnLevel)
 	case ERROR:
-		logrus.SetLevel(logrus.ErrorLevel)
-		return nil
+		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
 	case FATAL:
-		logrus.SetLevel(logrus.FatalLevel)
-		return nil
+		zerolog.SetGlobalLevel(zerolog.FatalLevel)
+	default:
+		return errors.New("unknown log level")
 	}
-
-	return errors.New("unknown log level")
+	return nil
 }

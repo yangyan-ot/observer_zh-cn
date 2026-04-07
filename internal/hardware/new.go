@@ -6,12 +6,12 @@ import (
 	"github.com/anyshake/observer/config"
 	"github.com/anyshake/observer/internal/dao/action"
 	"github.com/anyshake/observer/internal/hardware/explorer"
+	"github.com/anyshake/observer/pkg/logger"
 	"github.com/anyshake/observer/pkg/timesource"
 	"github.com/anyshake/observer/pkg/transport"
-	"github.com/sirupsen/logrus"
 )
 
-func New(logger *logrus.Entry, timeSrc *timesource.Source, actionHandler *action.Handler, explorerOptions explorer.ExplorerOptions, ntpOptions explorer.NtpOptions) (IHardware, error) {
+func New(logger *logger.Adapter, timeSrc *timesource.Source, actionHandler *action.Handler, explorerOptions explorer.ExplorerOptions, ntpOptions explorer.NtpOptions) (IHardware, error) {
 	tr, err := transport.New(explorerOptions.Endpoint, explorerOptions.ReadTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create hardware transport: %w", err)

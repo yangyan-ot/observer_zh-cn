@@ -16,6 +16,7 @@ import { DialogModal } from '../../components/ui/DialogModal';
 import { ErrorPage } from '../../components/ui/ErrorPage';
 import { InputType, TypedInput } from '../../components/ui/TypedInput';
 import { StatusCard } from '../../components/widget/StatusCard';
+import { SettingsConstraints } from '../../config/constraints';
 import {
     useGetServiceDataQuery,
     useRestartServiceMutation,
@@ -27,7 +28,6 @@ import {
 import { sendPromiseAlert } from '../../helpers/alert/sendPromiseAlert';
 import { sendUserConfirm } from '../../helpers/alert/sendUserConfirm';
 import { getTimeString } from '../../helpers/utils/getTimeString';
-import { SettingsConstraints } from '../../config/constraints';
 
 export const Service = () => {
     const { t } = useTranslation();

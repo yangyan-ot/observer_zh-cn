@@ -34,7 +34,7 @@ func (s *HttpServer) Setup(listen string) error {
 	s.engine = gin.New()
 
 	s.engine.Use(date_header.New(s.resolver.TimeSource))
-	s.engine.Use(recovery.New(s.log.Logger))
+	s.engine.Use(recovery.New(s.log))
 	s.engine.Use(httplog.New(s.log))
 	s.engine.Use(gzipHandler.Gzip(
 		gzip.BestCompression,

@@ -14,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/anyshake/observer/pkg/fifo"
+	"github.com/anyshake/observer/pkg/logger"
 	"github.com/anyshake/observer/pkg/message"
 	"github.com/anyshake/observer/pkg/metadata"
 	"github.com/anyshake/observer/pkg/ntpclient"
@@ -21,14 +22,13 @@ import (
 	"github.com/anyshake/observer/pkg/timesource"
 	"github.com/anyshake/observer/pkg/transport"
 	"github.com/samber/lo"
-	"github.com/sirupsen/logrus"
 )
 
 type ExplorerProtoImplV2 struct {
 	ChannelCodes    []string
 	ExplorerOptions ExplorerOptions
 	NtpOptions      NtpOptions
-	Logger          *logrus.Entry
+	Logger          *logger.Adapter
 	TimeSource      *timesource.Source
 
 	Transport  transport.ITransport
@@ -277,7 +277,7 @@ func (g *ExplorerProtoImplV2) Open(ctx context.Context) (context.Context, contex
 		for timeSourceInitialized := false; ; {
 			select {
 			case <-subCtx.Done():
-				g.Logger.Info("exiting from data packet reader")
+				g.Logger.Infoln("exiting from data packet reader")
 				if atomic.LoadInt32(&initFlag) == 0 {
 					close(readyChan)
 				}
@@ -501,7 +501,7 @@ func (g *ExplorerProtoImplV2) Open(ctx context.Context) (context.Context, contex
 				g.deviceStatus.IncrementFrames()
 				g.deviceStatus.SetUpdatedAt(time.UnixMilli(int64(timestamp)))
 			case <-subCtx.Done():
-				g.Logger.Info("exiting from data packet decoder")
+				g.Logger.Infoln("exiting from data packet decoder")
 				timer.Stop()
 				return
 			}
@@ -525,7 +525,7 @@ func (g *ExplorerProtoImplV2) Open(ctx context.Context) (context.Context, contex
 					timer.Reset(resyncInterval)
 					continue
 				}
-				g.Logger.Info("re-synchronizing time with NTP servers")
+				g.Logger.Infoln("re-synchronizing time with NTP servers")
 				offset, server, err := ntpClient.Query()
 				if err != nil {
 					g.Logger.Warnf("error occurred while re-synchronizing time with NTP: %v", err)
