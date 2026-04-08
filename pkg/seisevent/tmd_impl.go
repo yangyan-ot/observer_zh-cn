@@ -13,20 +13,22 @@ import (
 	"github.com/anyshake/observer/pkg/request"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const TMD_ID = "tmd"
 
 type TMD struct {
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (t *TMD) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      TMD_ID,
 		Country: "TH",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "Thai Meteorological Department",
 			"zh-TW": "泰國氣象局",
@@ -36,122 +38,146 @@ func (t *TMD) GetProperty() DataSourceProperty {
 }
 
 func (c *TMD) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
+
 	if c.cache.Valid() {
-		return c.cache.Get().([]Event), nil
-	}
-
-	res, err := request.GET(
-		"https://earthquake.tmd.go.th/inside.html?ps=200",
-		10*time.Second, time.Second, 3, false, nil,
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse HTML response
-	htmlDoc, err := goquery.NewDocumentFromReader(bytes.NewBuffer(res))
-	if err != nil {
-		return nil, err
-	}
-
-	var resultArr []Event
-	htmlDoc.Find(".tbis_leq1").Each(func(eventIdx int, s *goquery.Selection) {
-		seisEvent := Event{Verfied: true}
-		s.Find("td").Each(func(i int, s *goquery.Selection) {
-			switch i {
-			case 0:
-				timeStr := s.Text()
-				if len(timeStr) >= 19 {
-					timeStr = timeStr[:19]
-				}
-				ts, err := c.getTimestamp(timeStr)
-				if err != nil {
-					return
-				}
-				seisEvent.Timestamp = ts
-			case 1:
-				mag := string2Float(s.Text())
-				seisEvent.Magnitude = []Magnitude{{Type: ParseMagnitude("M"), Value: mag}}
-			case 2:
-				lat, err := c.getLatitude(s.Text())
-				if err != nil {
-					return
-				}
-				seisEvent.Latitude = lat
-			case 3:
-				lon, err := c.getLongitude(s.Text())
-				if err != nil {
-					return
-				}
-				seisEvent.Longitude = lon
-			case 4:
-				seisEvent.Depth = string2Float(s.Text())
-			case 6:
-				thai, eng, err := c.getRegion(s)
-				if err != nil {
-					return
-				}
-				seisEvent.Event = strconv.Itoa(eventIdx)
-				seisEvent.Region = fmt.Sprintf("%s (%s)", thai, eng)
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(TMD_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
 			}
-		})
 
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
-
-		resultArr = append(resultArr, seisEvent)
-	})
-	htmlDoc.Find(".tbis_leq2").Each(func(eventIdx int, s *goquery.Selection) {
-		seisEvent := Event{Verfied: true}
-		s.Find("td").Each(func(i int, s *goquery.Selection) {
-			switch i {
-			case 0:
-				timeStr := s.Text()
-				if len(timeStr) >= 19 {
-					timeStr = timeStr[:19]
-				}
-				ts, err := c.getTimestamp(timeStr)
-				if err != nil {
-					return
-				}
-				seisEvent.Timestamp = ts
-			case 1:
-				mag := string2Float(s.Text())
-				seisEvent.Magnitude = []Magnitude{{Type: ParseMagnitude("M"), Value: mag}}
-			case 2:
-				lat, err := c.getLatitude(s.Text())
-				if err != nil {
-					return
-				}
-				seisEvent.Latitude = lat
-			case 3:
-				lon, err := c.getLongitude(s.Text())
-				if err != nil {
-					return
-				}
-				seisEvent.Longitude = lon
-			case 4:
-				seisEvent.Depth = string2Float(s.Text())
-			case 6:
-				thai, eng, err := c.getRegion(s)
-				if err != nil {
-					return
-				}
-				seisEvent.Event = strconv.Itoa(eventIdx)
-				seisEvent.Region = fmt.Sprintf("%s (%s)", thai, eng)
+			res, err := request.GET(
+				"https://earthquake.tmd.go.th/inside.html?ps=200",
+				10*time.Second, time.Second, 3, false, nil,
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, err
 			}
+
+			// Parse HTML response
+			htmlDoc, err := goquery.NewDocumentFromReader(bytes.NewBuffer(res))
+			if err != nil {
+				return nil, err
+			}
+
+			var resultArr []Event
+			htmlDoc.Find(".tbis_leq1").Each(func(eventIdx int, s *goquery.Selection) {
+				seisEvent := Event{Verfied: true}
+				s.Find("td").Each(func(i int, s *goquery.Selection) {
+					switch i {
+					case 0:
+						timeStr := s.Text()
+						if len(timeStr) >= 19 {
+							timeStr = timeStr[:19]
+						}
+						ts, err := c.getTimestamp(timeStr)
+						if err != nil {
+							return
+						}
+						seisEvent.Timestamp = ts
+					case 1:
+						mag := string2Float(s.Text())
+						seisEvent.Magnitude = []Magnitude{{Type: ParseMagnitude("M"), Value: mag}}
+					case 2:
+						lat, err := c.getLatitude(s.Text())
+						if err != nil {
+							return
+						}
+						seisEvent.Latitude = lat
+					case 3:
+						lon, err := c.getLongitude(s.Text())
+						if err != nil {
+							return
+						}
+						seisEvent.Longitude = lon
+					case 4:
+						seisEvent.Depth = string2Float(s.Text())
+					case 6:
+						thai, eng, err := c.getRegion(s)
+						if err != nil {
+							return
+						}
+						seisEvent.Event = strconv.Itoa(eventIdx)
+						seisEvent.Region = fmt.Sprintf("%s (%s)", thai, eng)
+					}
+				})
+
+				seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
+				seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
+
+				resultArr = append(resultArr, seisEvent)
+			})
+			htmlDoc.Find(".tbis_leq2").Each(func(eventIdx int, s *goquery.Selection) {
+				seisEvent := Event{Verfied: true}
+				s.Find("td").Each(func(i int, s *goquery.Selection) {
+					switch i {
+					case 0:
+						timeStr := s.Text()
+						if len(timeStr) >= 19 {
+							timeStr = timeStr[:19]
+						}
+						ts, err := c.getTimestamp(timeStr)
+						if err != nil {
+							return
+						}
+						seisEvent.Timestamp = ts
+					case 1:
+						mag := string2Float(s.Text())
+						seisEvent.Magnitude = []Magnitude{{Type: ParseMagnitude("M"), Value: mag}}
+					case 2:
+						lat, err := c.getLatitude(s.Text())
+						if err != nil {
+							return
+						}
+						seisEvent.Latitude = lat
+					case 3:
+						lon, err := c.getLongitude(s.Text())
+						if err != nil {
+							return
+						}
+						seisEvent.Longitude = lon
+					case 4:
+						seisEvent.Depth = string2Float(s.Text())
+					case 6:
+						thai, eng, err := c.getRegion(s)
+						if err != nil {
+							return
+						}
+						seisEvent.Event = strconv.Itoa(eventIdx)
+						seisEvent.Region = fmt.Sprintf("%s (%s)", thai, eng)
+					}
+				})
+
+				resultArr = append(resultArr, seisEvent)
+			})
+
+			sortedEvents := sortSeismicEvents(resultArr)
+			c.cache.Set(sortedEvents)
+			return sortedEvents, nil
 		})
+		if err != nil {
+			return nil, err
+		}
 
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
+		baseEvents = v.([]Event)
+	}
 
-		resultArr = append(resultArr, seisEvent)
-	})
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
+	}
 
-	sortedEvents := sortSeismicEvents(resultArr)
-	c.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	return baseEvents, nil
 }
 
 func (t *TMD) getLatitude(latStr string) (float64, error) {

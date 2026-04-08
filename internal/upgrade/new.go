@@ -18,7 +18,7 @@ func NewHelper(currentExePath string, currentVer *semver.Version, currentBuild *
 		currentExePath:     currentExePath,
 		currentVer:         currentVer,
 		currentBuild:       currentBuild,
-		latestVer:          cache.New(cacheTimeout),
-		requiredVer:        cache.New(cacheTimeout),
+		latestVer:          cache.NewGeneric[*semver.Version](cacheTimeout),
+		requiredVer:        cache.NewGeneric[*semver.Version](cacheTimeout),
 	}
 }

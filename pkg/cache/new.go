@@ -2,8 +2,8 @@ package cache
 
 import "time"
 
-func New(ttl time.Duration) AnyCache {
-	return AnyCache{ttl: ttl}
+func NewGeneric[T any](ttl time.Duration) GenericCache[T] {
+	return GenericCache[T]{ttl: ttl}
 }
 
 func NewKv[T any](ttl time.Duration) KvCache[T] {

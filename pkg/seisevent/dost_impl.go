@@ -11,85 +11,110 @@ import (
 	"github.com/anyshake/observer/pkg/request"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const DOST_ID = "dost"
 
 type DOST struct {
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (c *DOST) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      DOST_ID,
 		Country: "PH",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "Philippine Institute of Volcanology and Seismology",
 			"zh-TW": "菲律賓火山地震研究所",
-			"zh-CN": "菲律宾火山地震研究所",
 		},
 	}
 }
 
 func (c *DOST) GetEvents(latitude, longitude float64) ([]Event, error) {
-	// Get DOST HTML response
+	var baseEvents []Event
+
 	if c.cache.Valid() {
-		return c.cache.Get().([]Event), nil
-	}
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(DOST_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
+			}
 
-	res, err := request.GET(
-		"https://earthquake.phivolcs.dost.gov.ph/",
-		10*time.Second, time.Second, 3, false, nil,
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
-	}
+			res, err := request.GET(
+				"https://earthquake.phivolcs.dost.gov.ph/",
+				10*time.Second, time.Second, 3, false, nil,
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, err
+			}
 
-	// Parse DOST HTML response
-	htmlDoc, err := goquery.NewDocumentFromReader(bytes.NewBuffer(res))
-	if err != nil {
-		return nil, err
-	}
+			// Parse DOST HTML response
+			htmlDoc, err := goquery.NewDocumentFromReader(bytes.NewBuffer(res))
+			if err != nil {
+				return nil, err
+			}
 
-	var resultArr []Event
-	htmlDoc.Find("table").Each(func(i int, s *goquery.Selection) {
-		htmlText := s.Text()
-		if strings.Contains(htmlText, "Latitude") &&
-			strings.Contains(htmlText, "Longitude") &&
-			strings.Contains(htmlText, "Depth") &&
-			strings.Contains(htmlText, "Mag") &&
-			strings.Contains(htmlText, "Location") {
-			var seisEvent Event
-			s.Find("td").Each(func(i int, s *goquery.Selection) {
-				switch i % 6 {
-				case 0:
-					seisEvent.Timestamp = c.getTimestamp(s.Text())
-				case 1:
-					seisEvent.Latitude = c.getLatitude(s.Text())
-				case 2:
-					seisEvent.Longitude = c.getLongitude(s.Text())
-				case 3:
-					seisEvent.Depth = c.getDepth(s.Text())
-				case 4:
-					seisEvent.Magnitude = c.getMagnitude(s.Text())
-				case 5:
-					seisEvent.Verfied = true
-					seisEvent.Event = fmt.Sprintf("%d", i/6+1)
-					seisEvent.Region = c.getRegion(s.Text())
-					seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-					seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
-					resultArr = append(resultArr, seisEvent)
+			var resultArr []Event
+			htmlDoc.Find("table").Each(func(i int, s *goquery.Selection) {
+				htmlText := s.Text()
+				if strings.Contains(htmlText, "Latitude") &&
+					strings.Contains(htmlText, "Longitude") &&
+					strings.Contains(htmlText, "Depth") &&
+					strings.Contains(htmlText, "Mag") &&
+					strings.Contains(htmlText, "Location") {
+					var seisEvent Event
+					s.Find("td").Each(func(i int, s *goquery.Selection) {
+						switch i % 6 {
+						case 0:
+							seisEvent.Timestamp = c.getTimestamp(s.Text())
+						case 1:
+							seisEvent.Latitude = c.getLatitude(s.Text())
+						case 2:
+							seisEvent.Longitude = c.getLongitude(s.Text())
+						case 3:
+							seisEvent.Depth = c.getDepth(s.Text())
+						case 4:
+							seisEvent.Magnitude = c.getMagnitude(s.Text())
+						case 5:
+							seisEvent.Verfied = true
+							seisEvent.Event = fmt.Sprintf("%d", i/6+1)
+							seisEvent.Region = c.getRegion(s.Text())
+							resultArr = append(resultArr, seisEvent)
+						}
+					})
 				}
 			})
-		}
-	})
 
-	sortedEvents := sortSeismicEvents(resultArr)
-	c.cache.Set(sortedEvents)
-	return sortedEvents, nil
+			sortedEvents := sortSeismicEvents(resultArr)
+			c.cache.Set(sortedEvents)
+			return sortedEvents, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		baseEvents = v.([]Event)
+	}
+
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
+	}
+
+	return baseEvents, nil
 }
 
 func (c *DOST) getTimestamp(data string) int64 {

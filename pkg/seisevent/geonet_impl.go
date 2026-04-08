@@ -9,97 +9,121 @@ import (
 	"github.com/anyshake/observer/pkg/request"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const GEONET_ID = "geonet"
 
 type GEONET struct {
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (u *GEONET) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      GEONET_ID,
 		Country: "NZ",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "The GeoNet Project",
 			"zh-TW": "GeoNet 計畫",
-			"zh-CN": "GeoNet 计划",
 		},
 	}
 }
 
-func (u *GEONET) GetEvents(latitude, longitude float64) ([]Event, error) {
-	if u.cache.Valid() {
-		return u.cache.Get().([]Event), nil
-	}
+func (c *GEONET) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
 
-	res, err := request.GET(
-		"https://api.geonet.org.nz/quake?MMI=1",
-		10*time.Second, time.Second, 3, false, nil,
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
-	}
+	if c.cache.Valid() {
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(GEONET_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
+			}
 
-	// Parse GEONET JSON response
-	var dataMap map[string]any
-	err = json.Unmarshal(res, &dataMap)
-	if err != nil {
-		return nil, err
-	}
+			res, err := request.GET(
+				"https://api.geonet.org.nz/quake?MMI=1",
+				10*time.Second, time.Second, 3, false, nil,
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, err
+			}
 
-	dataMapEvents, ok := dataMap["features"].([]any)
-	if !ok {
-		return nil, errors.New("seismic event data is not available")
-	}
+			// Parse GEONET JSON response
+			var dataMap map[string]any
+			err = json.Unmarshal(res, &dataMap)
+			if err != nil {
+				return nil, err
+			}
 
-	// Ensure the response has the expected keys and values
-	expectedKeysInDataMap := []string{"properties", "geometry"}
-	expectedKeysInProperties := []string{"publicID", "time", "depth", "magnitude", "locality"}
-	expectedKeysInGeometry := []string{"coordinates"}
+			dataMapEvents, ok := dataMap["features"].([]any)
+			if !ok {
+				return nil, errors.New("seismic event data is not available")
+			}
 
-	var resultArr []Event
-	for _, event := range dataMapEvents {
-		if !isMapHasKeys(event.(map[string]any), expectedKeysInDataMap) {
-			continue
+			// Ensure the response has the expected keys and values
+			expectedKeysInDataMap := []string{"properties", "geometry"}
+			expectedKeysInProperties := []string{"publicID", "time", "depth", "magnitude", "locality"}
+			expectedKeysInGeometry := []string{"coordinates"}
+
+			var resultArr []Event
+			for _, event := range dataMapEvents {
+				if !isMapHasKeys(event.(map[string]any), expectedKeysInDataMap) {
+					continue
+				}
+
+				var (
+					properties = event.(map[string]any)["properties"]
+					geometry   = event.(map[string]any)["geometry"]
+				)
+				if !isMapHasKeys(properties.(map[string]any), expectedKeysInProperties) || !isMapHasKeys(geometry.(map[string]any), expectedKeysInGeometry) {
+					continue
+				}
+
+				coordinates := geometry.(map[string]any)["coordinates"]
+				if len(coordinates.([]any)) != 2 {
+					continue
+				}
+
+				resultArr = append(resultArr, Event{
+					Verfied:   true,
+					Latitude:  coordinates.([]any)[1].(float64),
+					Longitude: coordinates.([]any)[0].(float64),
+					Depth:     properties.(map[string]any)["depth"].(float64),
+					Event:     properties.(map[string]any)["publicID"].(string),
+					Region:    properties.(map[string]any)["locality"].(string),
+					Magnitude: c.getMagnitude(properties.(map[string]any)["magnitude"].(float64)),
+					Timestamp: c.getTimestamp(properties.(map[string]any)["time"].(string)),
+				})
+			}
+
+			sortedEvents := sortSeismicEvents(resultArr)
+			c.cache.Set(sortedEvents)
+			return sortedEvents, nil
+		})
+		if err != nil {
+			return nil, err
 		}
 
-		var (
-			properties = event.(map[string]any)["properties"]
-			geometry   = event.(map[string]any)["geometry"]
+		baseEvents = v.([]Event)
+	}
+
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
 		)
-		if !isMapHasKeys(properties.(map[string]any), expectedKeysInProperties) || !isMapHasKeys(geometry.(map[string]any), expectedKeysInGeometry) {
-			continue
-		}
-
-		coordinates := geometry.(map[string]any)["coordinates"]
-		if len(coordinates.([]any)) != 2 {
-			continue
-		}
-
-		seisEvent := Event{
-			Verfied:   true,
-			Latitude:  coordinates.([]any)[1].(float64),
-			Longitude: coordinates.([]any)[0].(float64),
-			Depth:     properties.(map[string]any)["depth"].(float64),
-			Event:     properties.(map[string]any)["publicID"].(string),
-			Region:    properties.(map[string]any)["locality"].(string),
-			Magnitude: u.getMagnitude(properties.(map[string]any)["magnitude"].(float64)),
-			Timestamp: u.getTimestamp(properties.(map[string]any)["time"].(string)),
-		}
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(u.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
-
-		resultArr = append(resultArr, seisEvent)
 	}
 
-	sortedEvents := sortSeismicEvents(resultArr)
-	u.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	return baseEvents, nil
 }
 
 func (u *GEONET) getTimestamp(data string) int64 {

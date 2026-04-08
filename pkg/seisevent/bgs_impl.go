@@ -11,65 +11,93 @@ import (
 	"github.com/anyshake/observer/pkg/request"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const BGS_ID = "bgs"
 
 type BGS struct {
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (c *BGS) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      BGS_ID,
 		Country: "GB",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "British Geological Survey",
 			"zh-TW": "英國地質調查局",
-			"zh-CN": "英国地质调查局",
 		},
 	}
 }
 
 func (c *BGS) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
+
 	if c.cache.Valid() {
-		return c.cache.Get().([]Event), nil
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(BGS_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
+			}
+
+			worldEventRes, err := request.GET(
+				"https://quakes.bgs.ac.uk/feeds/WorldSeismology.xml",
+				10*time.Second, time.Second, 3, false, nil,
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get WorldSeismology.xml: %w", err)
+			}
+			ukEventRes, err := request.GET(
+				"https://quakes.bgs.ac.uk/feeds/MhSeismology.xml",
+				10*time.Second, time.Second, 3, false, nil,
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get MhSeismology.xml: %w", err)
+			}
+
+			worldEvent, err := c.parseXmlData("WorldSeismology", string(worldEventRes))
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse WorldSeismology.xml: %w", err)
+			}
+			ukEvent, err := c.parseXmlData("MhSeismology", string(ukEventRes))
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse MhSeismology.xml: %w", err)
+			}
+
+			sorted := sortSeismicEvents(append(worldEvent, ukEvent...))
+			c.cache.Set(sorted)
+			return sorted, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		baseEvents = v.([]Event)
 	}
 
-	worldEventRes, err := request.GET(
-		"https://quakes.bgs.ac.uk/feeds/WorldSeismology.xml",
-		10*time.Second, time.Second, 3, false, nil,
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get WorldSeismology.xml: %w", err)
-	}
-	ukEventRes, err := request.GET(
-		"https://quakes.bgs.ac.uk/feeds/MhSeismology.xml",
-		10*time.Second, time.Second, 3, false, nil,
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get MhSeismology.xml: %w", err)
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
 	}
 
-	worldEvent, err := c.parseXmlData("WorldSeismology", string(worldEventRes), latitude, longitude)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse WorldSeismology.xml: %w", err)
-	}
-	ukEvent, err := c.parseXmlData("MhSeismology", string(ukEventRes), latitude, longitude)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse MhSeismology.xml: %w", err)
-	}
-
-	sortedEvents := sortSeismicEvents(append(worldEvent, ukEvent...))
-	c.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	return baseEvents, nil
 }
 
-func (c *BGS) parseXmlData(tag, xmlData string, latitude, longitude float64) ([]Event, error) {
+func (c *BGS) parseXmlData(tag, xmlData string) ([]Event, error) {
 	decoder := xml.NewDecoder(strings.NewReader(xmlData))
 
 	var (
@@ -146,8 +174,6 @@ func (c *BGS) parseXmlData(tag, xmlData string, latitude, longitude float64) ([]
 				seisEvent.Longitude = string2Float(val)
 			}
 		}
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
 
 		events = append(events, seisEvent)
 	}

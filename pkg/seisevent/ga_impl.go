@@ -9,91 +9,115 @@ import (
 	"github.com/anyshake/observer/pkg/request"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const GA_ID = "ga"
 
 type GA struct {
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (c *GA) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      GA_ID,
 		Country: "AU",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "Geoscience Australia",
 			"zh-TW": "澳洲地球科學局",
-			"zh-CN": "澳洲地球科学局",
 		},
 	}
 }
 
 func (c *GA) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
+
 	if c.cache.Valid() {
-		return c.cache.Get().([]Event), nil
-	}
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(GA_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
+			}
 
-	res, err := request.GET(
-		"https://earthquakes.ga.gov.au/cache/recent-earthquakes.json",
-		30*time.Second, time.Second, 3, false, nil,
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
-	}
+			res, err := request.GET(
+				"https://earthquakes.ga.gov.au/cache/recent-earthquakes.json",
+				30*time.Second, time.Second, 3, false, nil,
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, err
+			}
 
-	// Parse JMA JSON response
-	var dataMap map[string]any
-	err = json.Unmarshal(res, &dataMap)
-	if err != nil {
-		return nil, err
-	}
+			// Parse JMA JSON response
+			var dataMap map[string]any
+			err = json.Unmarshal(res, &dataMap)
+			if err != nil {
+				return nil, err
+			}
 
-	dataMapEvents, ok := dataMap["features"].([]any)
-	if !ok {
-		return nil, errors.New("seismic event data is not available")
-	}
+			dataMapEvents, ok := dataMap["features"].([]any)
+			if !ok {
+				return nil, errors.New("seismic event data is not available")
+			}
 
-	// Ensure the response has the expected keys and values
-	expectedKeysInDataMap := []string{"properties", "geometry"}
-	expectedKeysInProperties := []string{"depth", "preferred_magnitude_type", "preferred_magnitude", "event_id", "latitude", "longitude", "description", "evaluation_status", "origin_time"}
+			// Ensure the response has the expected keys and values
+			expectedKeysInDataMap := []string{"properties", "geometry"}
+			expectedKeysInProperties := []string{"depth", "preferred_magnitude_type", "preferred_magnitude", "event_id", "latitude", "longitude", "description", "evaluation_status", "origin_time"}
 
-	var resultArr []Event
-	for _, event := range dataMapEvents {
-		if !isMapHasKeys(event.(map[string]any), expectedKeysInDataMap) {
-			continue
+			var resultArr []Event
+			for _, event := range dataMapEvents {
+				if !isMapHasKeys(event.(map[string]any), expectedKeysInDataMap) {
+					continue
+				}
+
+				properties := event.(map[string]any)["properties"]
+				if !isMapHasKeys(properties.(map[string]any), expectedKeysInProperties) {
+					continue
+				}
+
+				resultArr = append(resultArr, Event{
+					Depth:     properties.(map[string]any)["depth"].(float64),
+					Verfied:   properties.(map[string]any)["evaluation_status"].(string) == "confirmed",
+					Timestamp: c.getTimestamp(properties.(map[string]any)["origin_time"].(string)),
+					Event:     properties.(map[string]any)["event_id"].(string),
+					Region:    properties.(map[string]any)["description"].(string),
+					Latitude:  properties.(map[string]any)["latitude"].(float64),
+					Longitude: properties.(map[string]any)["longitude"].(float64),
+					Magnitude: c.getMagnitude(
+						properties.(map[string]any)["preferred_magnitude_type"].(string),
+						properties.(map[string]any)["preferred_magnitude"].(float64),
+					),
+				})
+			}
+
+			sortedEvents := sortSeismicEvents(resultArr)
+			c.cache.Set(sortedEvents)
+			return sortedEvents, nil
+		})
+		if err != nil {
+			return nil, err
 		}
 
-		properties := event.(map[string]any)["properties"]
-		if !isMapHasKeys(properties.(map[string]any), expectedKeysInProperties) {
-			continue
-		}
-
-		seisEvent := Event{
-			Depth:     properties.(map[string]any)["depth"].(float64),
-			Verfied:   properties.(map[string]any)["evaluation_status"].(string) == "confirmed",
-			Timestamp: c.getTimestamp(properties.(map[string]any)["origin_time"].(string)),
-			Event:     properties.(map[string]any)["event_id"].(string),
-			Region:    properties.(map[string]any)["description"].(string),
-			Latitude:  properties.(map[string]any)["latitude"].(float64),
-			Longitude: properties.(map[string]any)["longitude"].(float64),
-			Magnitude: c.getMagnitude(
-				properties.(map[string]any)["preferred_magnitude_type"].(string),
-				properties.(map[string]any)["preferred_magnitude"].(float64),
-			),
-		}
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
-
-		resultArr = append(resultArr, seisEvent)
+		baseEvents = v.([]Event)
 	}
 
-	sortedEvents := sortSeismicEvents(resultArr)
-	c.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
+	}
+
+	return baseEvents, nil
 }
 
 func (c *GA) getTimestamp(data string) int64 {

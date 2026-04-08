@@ -12,83 +12,109 @@ import (
 	"github.com/anyshake/observer/pkg/request"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const CEA_ID = "cea"
 
 type CEA struct {
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (c *CEA) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      CEA_ID,
 		Country: "FR",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "CEA/Dase - Earth and Environmental Science",
 			"zh-TW": "原子能和替代能源委員會",
-			"zh-CN": "原子能和替代能源委员会",
 		},
 	}
 }
 
 func (c *CEA) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
+
 	if c.cache.Valid() {
-		return c.cache.Get().([]Event), nil
-	}
-
-	res, err := request.GET(
-		"https://www-dase.cea.fr/evenement/derniers_evenements.php",
-		10*time.Second, time.Second, 3, false, nil,
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse CEA/DASE HTML response
-	htmlDoc, err := goquery.NewDocumentFromReader(bytes.NewBuffer(res))
-	if err != nil {
-		return nil, err
-	}
-
-	var resultArr []Event
-	htmlDoc.Find(".arial11bleu").Each(func(i int, s *goquery.Selection) {
-		var (
-			dateText  string
-			seisEvent Event
-		)
-		s.Find("td").Each(func(i int, s *goquery.Selection) {
-			textValue := strings.TrimSpace(s.Text())
-			switch i {
-			case 0:
-				seisEvent.Verfied = false
-				seisEvent.Depth = -1
-				dateText = textValue
-			case 1:
-				fullTimeString := fmt.Sprintf("%s %s", dateText, textValue)
-				seisEvent.Timestamp = c.getTimestamp(fullTimeString)
-			case 2:
-				seisEvent.Latitude = c.getLatitude(textValue)
-				seisEvent.Longitude = c.getLongitude(textValue)
-			case 3:
-				seisEvent.Event = textValue
-				seisEvent.Region = textValue
-			case 4:
-				seisEvent.Magnitude = c.getMagnitude(textValue)
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(CEA_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
 			}
+
+			res, err := request.GET(
+				"https://www-dase.cea.fr/evenement/derniers_evenements.php",
+				10*time.Second, time.Second, 3, false, nil,
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, err
+			}
+
+			// Parse CEA/DASE HTML response
+			htmlDoc, err := goquery.NewDocumentFromReader(bytes.NewBuffer(res))
+			if err != nil {
+				return nil, err
+			}
+
+			var resultArr []Event
+			htmlDoc.Find(".arial11bleu").Each(func(i int, s *goquery.Selection) {
+				var (
+					dateText  string
+					seisEvent Event
+				)
+				s.Find("td").Each(func(i int, s *goquery.Selection) {
+					textValue := strings.TrimSpace(s.Text())
+					switch i {
+					case 0:
+						seisEvent.Verfied = false
+						seisEvent.Depth = -1
+						dateText = textValue
+					case 1:
+						fullTimeString := fmt.Sprintf("%s %s", dateText, textValue)
+						seisEvent.Timestamp = c.getTimestamp(fullTimeString)
+					case 2:
+						seisEvent.Latitude = c.getLatitude(textValue)
+						seisEvent.Longitude = c.getLongitude(textValue)
+					case 3:
+						seisEvent.Event = textValue
+						seisEvent.Region = textValue
+					case 4:
+						seisEvent.Magnitude = c.getMagnitude(textValue)
+					}
+				})
+
+				resultArr = append(resultArr, seisEvent)
+			})
+
+			sortedEvents := sortSeismicEvents(resultArr)
+			c.cache.Set(sortedEvents)
+			return sortedEvents, nil
 		})
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
+		if err != nil {
+			return nil, err
+		}
 
-		resultArr = append(resultArr, seisEvent)
-	})
+		baseEvents = v.([]Event)
+	}
 
-	sortedEvents := sortSeismicEvents(resultArr)
-	c.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
+	}
+
+	return baseEvents, nil
 }
 
 func (c *CEA) getTimestamp(data string) int64 {

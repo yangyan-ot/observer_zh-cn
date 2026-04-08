@@ -12,6 +12,7 @@ import (
 	"github.com/anyshake/observer/pkg/request"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const NCS_ID = "ncs"
@@ -19,102 +20,125 @@ const NCS_ID = "ncs"
 type NCS struct {
 	resolvers       dnsquery.Resolvers
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (c *NCS) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      NCS_ID,
 		Country: "IN",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "National Center for Seismology",
 			"zh-TW": "印度國家地震中心",
-			"zh-CN": "印度国家地震中心",
 		},
 	}
 }
 
 func (c *NCS) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
+
 	if c.cache.Valid() {
-		return c.cache.Get().([]Event), nil
-	}
-
-	res, err := request.GET(
-		"https://riseq.seismo.gov.in/riseq/earthquake",
-		30*time.Second, time.Second, 3, false,
-		createCustomTransport(c.resolvers, "ncs"),
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse NCS HTML response
-	htmlDoc, err := goquery.NewDocumentFromReader(bytes.NewBuffer(res))
-	if err != nil {
-		return nil, err
-	}
-
-	var resultArr []Event
-	htmlDoc.Find("#sidebar-wrapper").Each(func(i int, s *goquery.Selection) {
-		s.Find(".event_list").Each(func(i int, s *goquery.Selection) {
-			dataJson, ok := s.Attr("data-json")
-			if !ok {
-				return
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(NCS_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
 			}
 
-			var dataMap map[string]any
-			err := json.Unmarshal([]byte(dataJson), &dataMap)
+			res, err := request.GET(
+				"https://riseq.seismo.gov.in/riseq/earthquake",
+				30*time.Second, time.Second, 3, false,
+				createCustomTransport(c.resolvers, "ncs"),
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
 			if err != nil {
-				return
+				return nil, err
 			}
 
-			eventId, ok := dataMap["event_id"].(string)
-			if !ok {
-				return
-			}
-			eventName, ok := dataMap["event_name"].(string)
-			if !ok {
-				return
-			}
-			eventTime, ok := dataMap["origin_time"].(string)
-			if !ok {
-				return
-			}
-			eventLatLon, ok := dataMap["lat_long"].(string)
-			if !ok {
-				return
-			}
-			eventMagDepth, ok := dataMap["magnitude_depth"].(string)
-			if !ok {
-				return
-			}
-			eventType, ok := dataMap["event_type"].(string)
-			if !ok {
-				return
+			// Parse NCS HTML response
+			htmlDoc, err := goquery.NewDocumentFromReader(bytes.NewBuffer(res))
+			if err != nil {
+				return nil, err
 			}
 
-			seisEvent := Event{
-				Event:     eventId,
-				Region:    eventName,
-				Verfied:   eventType == "Reviewed",
-				Latitude:  c.getLatitude(eventLatLon),
-				Longitude: c.getLongitude(eventLatLon),
-				Magnitude: c.getMagnitude(eventMagDepth),
-				Depth:     c.getDepth(eventMagDepth),
-				Timestamp: c.getTimestamp(eventTime),
-			}
-			seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-			seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
+			var resultArr []Event
+			htmlDoc.Find("#sidebar-wrapper").Each(func(i int, s *goquery.Selection) {
+				s.Find(".event_list").Each(func(i int, s *goquery.Selection) {
+					dataJson, ok := s.Attr("data-json")
+					if !ok {
+						return
+					}
 
-			resultArr = append(resultArr, seisEvent)
+					var dataMap map[string]any
+					err := json.Unmarshal([]byte(dataJson), &dataMap)
+					if err != nil {
+						return
+					}
+
+					eventId, ok := dataMap["event_id"].(string)
+					if !ok {
+						return
+					}
+					eventName, ok := dataMap["event_name"].(string)
+					if !ok {
+						return
+					}
+					eventTime, ok := dataMap["origin_time"].(string)
+					if !ok {
+						return
+					}
+					eventLatLon, ok := dataMap["lat_long"].(string)
+					if !ok {
+						return
+					}
+					eventMagDepth, ok := dataMap["magnitude_depth"].(string)
+					if !ok {
+						return
+					}
+					eventType, ok := dataMap["event_type"].(string)
+					if !ok {
+						return
+					}
+
+					resultArr = append(resultArr, Event{
+						Event:     eventId,
+						Region:    eventName,
+						Verfied:   eventType == "Reviewed",
+						Latitude:  c.getLatitude(eventLatLon),
+						Longitude: c.getLongitude(eventLatLon),
+						Magnitude: c.getMagnitude(eventMagDepth),
+						Depth:     c.getDepth(eventMagDepth),
+						Timestamp: c.getTimestamp(eventTime),
+					})
+				})
+			})
+
+			sortedEvents := sortSeismicEvents(resultArr)
+			c.cache.Set(sortedEvents)
+			return sortedEvents, nil
 		})
-	})
+		if err != nil {
+			return nil, err
+		}
 
-	sortedEvents := sortSeismicEvents(resultArr)
-	c.cache.Set(sortedEvents)
-	return sortedEvents, nil
+		baseEvents = v.([]Event)
+	}
+
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
+	}
+
+	return baseEvents, nil
 }
 
 func (c *NCS) getTimestamp(data string) int64 {

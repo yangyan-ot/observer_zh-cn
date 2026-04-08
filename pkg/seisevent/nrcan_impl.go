@@ -11,134 +11,158 @@ import (
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
 	"github.com/sbabiv/xml2map"
+	"golang.org/x/sync/singleflight"
 )
 
 const NRCAN_ID = "nrcan"
 
 type NRCAN struct {
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (s *NRCAN) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      NRCAN_ID,
 		Country: "CA",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "Ministry of Energy and Natural Resources of Canada",
 			"zh-TW": "加拿大自然資源部",
-			"zh-CN": "加拿大自然资源部",
 		},
 	}
 }
 
 func (s *NRCAN) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
+
 	if s.cache.Valid() {
-		return s.cache.Get().([]Event), nil
-	}
+		baseEvents = s.cache.Get()
+	} else {
+		v, err, _ := s.sf.Do(NRCAN_ID, func() (any, error) {
+			if s.cache.Valid() {
+				return s.cache.Get(), nil
+			}
 
-	res, err := request.GET(
-		"https://www.earthquakescanada.nrcan.gc.ca/cache/earthquakes/canada-30.xml",
-		30*time.Second, time.Second, 3, false, nil,
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
-	}
+			res, err := request.GET(
+				"https://www.earthquakescanada.nrcan.gc.ca/cache/earthquakes/canada-30.xml",
+				30*time.Second, time.Second, 3, false, nil,
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, err
+			}
 
-	// Parse NRCAN XML response
-	dataMap, err := xml2map.NewDecoder(strings.NewReader(string(res))).Decode()
-	if err != nil {
-		return nil, err
-	}
-	dataMapRoot, ok := dataMap["1.2:quakeml"].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("source data is not valid, missing 1.2:quakeml")
-	}
-	dataMapEventParameters, ok := dataMapRoot["1.2:eventParameters"].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("source data is not valid, missing 1.2:eventParameters")
-	}
-	dataMapEvents, ok := dataMapEventParameters["1.2:event"].([]map[string]any)
-	if !ok {
-		return nil, errors.New("seismic event data is not available")
-	}
+			// Parse NRCAN XML response
+			dataMap, err := xml2map.NewDecoder(strings.NewReader(string(res))).Decode()
+			if err != nil {
+				return nil, err
+			}
+			dataMapRoot, ok := dataMap["1.2:quakeml"].(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("source data is not valid, missing 1.2:quakeml")
+			}
+			dataMapEventParameters, ok := dataMapRoot["1.2:eventParameters"].(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("source data is not valid, missing 1.2:eventParameters")
+			}
+			dataMapEvents, ok := dataMapEventParameters["1.2:event"].([]map[string]any)
+			if !ok {
+				return nil, errors.New("seismic event data is not available")
+			}
 
-	// Ensure the response has the expected keys and values
-	expectedKeys := []string{"1.2:type", "1.2:typeCertainty", "1.2:description", "1.2:origin", "1.2:magnitude"}
-	expectedKeysInDescription := []string{"1.2:text"}
-	expectedKeysInOrigin := []string{"1.2:time", "1.2:latitude", "1.2:longitude", "1.2:depth"}
-	expectedKeysInMagnitude := []string{"1.2:mag", "1.2:type"}
+			// Ensure the response has the expected keys and values
+			expectedKeys := []string{"1.2:type", "1.2:typeCertainty", "1.2:description", "1.2:origin", "1.2:magnitude"}
+			expectedKeysInDescription := []string{"1.2:text"}
+			expectedKeysInOrigin := []string{"1.2:time", "1.2:latitude", "1.2:longitude", "1.2:depth"}
+			expectedKeysInMagnitude := []string{"1.2:mag", "1.2:type"}
 
-	var resultArr []Event
-	for index, event := range dataMapEvents {
-		if !isMapHasKeys(event, expectedKeys) {
-			continue
+			var resultArr []Event
+			for index, event := range dataMapEvents {
+				if !isMapHasKeys(event, expectedKeys) {
+					continue
+				}
+
+				// Check if the event is earthquake
+				if event["1.2:type"].(string) != "earthquake" {
+					continue
+				}
+
+				var (
+					description = event["1.2:description"].(map[string]any)
+					origin      = event["1.2:origin"].(map[string]any)
+					magnitude   = event["1.2:magnitude"].(map[string]any)
+				)
+				if !isMapHasKeys(description, expectedKeysInDescription) || !isMapHasKeys(origin, expectedKeysInOrigin) || !isMapHasKeys(magnitude, expectedKeysInMagnitude) {
+					continue
+				}
+
+				eventName, ok := description["1.2:text"].(string)
+				if !ok {
+					continue
+				}
+				eventTime, ok := origin["1.2:time"].(map[string]any)["1.2:value"].(string)
+				if !ok {
+					continue
+				}
+				eventLatitude, ok := origin["1.2:latitude"].(map[string]any)["1.2:value"].(string)
+				if !ok {
+					continue
+				}
+				eventLongitude, ok := origin["1.2:longitude"].(map[string]any)["1.2:value"].(string)
+				if !ok {
+					continue
+				}
+				eventDepth, ok := origin["1.2:depth"].(map[string]any)["1.2:value"].(string)
+				if !ok {
+					continue
+				}
+				eventMagnitude, ok := magnitude["1.2:mag"].(map[string]any)["1.2:value"].(string)
+				if !ok {
+					continue
+				}
+				eventMagType, ok := magnitude["1.2:type"].(string)
+				if !ok {
+					continue
+				}
+
+				resultArr = append(resultArr, Event{
+					Verfied:   event["1.2:typeCertainty"].(string) == "known",
+					Region:    eventName,
+					Latitude:  string2Float(eventLatitude),
+					Longitude: string2Float(eventLongitude),
+					Depth:     string2Float(eventDepth),
+					Magnitude: s.getMagnitude(eventMagType, eventMagnitude),
+					Timestamp: s.getTimestamp(eventTime),
+					Event:     fmt.Sprintf("NRCAN-%d", index),
+				})
+			}
+
+			sortedEvents := sortSeismicEvents(resultArr)
+			s.cache.Set(sortedEvents)
+			return sortedEvents, nil
+		})
+		if err != nil {
+			return nil, err
 		}
 
-		// Check if the event is earthquake
-		if event["1.2:type"].(string) != "earthquake" {
-			continue
-		}
+		baseEvents = v.([]Event)
+	}
 
-		var (
-			description = event["1.2:description"].(map[string]any)
-			origin      = event["1.2:origin"].(map[string]any)
-			magnitude   = event["1.2:magnitude"].(map[string]any)
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			s.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
 		)
-		if !isMapHasKeys(description, expectedKeysInDescription) || !isMapHasKeys(origin, expectedKeysInOrigin) || !isMapHasKeys(magnitude, expectedKeysInMagnitude) {
-			continue
-		}
-
-		eventName, ok := description["1.2:text"].(string)
-		if !ok {
-			continue
-		}
-		eventTime, ok := origin["1.2:time"].(map[string]any)["1.2:value"].(string)
-		if !ok {
-			continue
-		}
-		eventLatitude, ok := origin["1.2:latitude"].(map[string]any)["1.2:value"].(string)
-		if !ok {
-			continue
-		}
-		eventLongitude, ok := origin["1.2:longitude"].(map[string]any)["1.2:value"].(string)
-		if !ok {
-			continue
-		}
-		eventDepth, ok := origin["1.2:depth"].(map[string]any)["1.2:value"].(string)
-		if !ok {
-			continue
-		}
-		eventMagnitude, ok := magnitude["1.2:mag"].(map[string]any)["1.2:value"].(string)
-		if !ok {
-			continue
-		}
-		eventMagType, ok := magnitude["1.2:type"].(string)
-		if !ok {
-			continue
-		}
-
-		seisEvent := Event{
-			Verfied:   event["1.2:typeCertainty"].(string) == "known",
-			Region:    eventName,
-			Latitude:  string2Float(eventLatitude),
-			Longitude: string2Float(eventLongitude),
-			Depth:     string2Float(eventDepth),
-			Magnitude: s.getMagnitude(eventMagType, eventMagnitude),
-			Timestamp: s.getTimestamp(eventTime),
-			Event:     fmt.Sprintf("NRCAN-%d", index),
-		}
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(s.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
-
-		resultArr = append(resultArr, seisEvent)
 	}
 
-	sortedEvents := sortSeismicEvents(resultArr)
-	s.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	return baseEvents, nil
 }
 
 func (s *NRCAN) getTimestamp(data string) int64 {

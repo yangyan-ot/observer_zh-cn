@@ -2,10 +2,10 @@ package cache
 
 import "time"
 
-func (a *AnyCache) Set(data any) {
+func (a *GenericCache[T]) Set(data T) {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
-	a.cache = data
+	a.cache = &data
 	a.createdAt = time.Now()
 }
 

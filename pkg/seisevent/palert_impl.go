@@ -11,13 +11,15 @@ import (
 	"github.com/anyshake/observer/pkg/timesource"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const PALERT_ID = "p-alert"
 
 type PALERT struct {
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 	timeSource      *timesource.Source
 }
 
@@ -25,91 +27,113 @@ func (c *PALERT) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      PALERT_ID,
 		Country: "TW",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "P-Alert Strong Motion Network",
 			"zh-TW": "P-Alert 觀測網",
-			"zh-CN": "P-Alert 观测网",
 		},
 	}
 }
 
 func (c *PALERT) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
+
 	if c.cache.Valid() {
-		return c.cache.Get().([]Event), nil
-	}
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(PALERT_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
+			}
 
-	currentTime := c.timeSource.Now()
-	res, err := request.POST(
-		"https://palert.earth.sinica.edu.tw/graphql/",
-		fmt.Sprintf(
-			`{"query":"query ($date: [Date!], $depth: [Float!], $ml: [Float!], $dateTime: DateTime, $needHaspga: Boolean!) {\n  eventList(\n    QueryEvent: {depth: $depth, date: $date, ml: $ml, dateTime: $dateTime}\n    needHaspga: $needHaspga\n  ) {\n    DateUTC\n    Depth\n    Latitude\n    Longitude\n    ML\n    hasPGA @include(if: $needHaspga)\n  }\n}","variables":{"date":["%s","%s"],"ml":[0,10],"depth":[0,1000],"needHaspga":false}}`,
-			currentTime.AddDate(-1, 0, 0).Format("2006-01-02"),
-			currentTime.Format("2006-01-02"),
-		),
-		"application/json", 10*time.Second, time.Second, 3, false, nil,
-		map[string]string{
-			"User-Agent": uarand.GetRandom(),
-			"Referer":    "https://palert.earth.sinica.edu.tw/database",
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
+			currentTime := c.timeSource.Now()
+			res, err := request.POST(
+				"https://palert.earth.sinica.edu.tw/graphql/",
+				fmt.Sprintf(
+					`{"query":"query ($date: [Date!], $depth: [Float!], $ml: [Float!], $dateTime: DateTime, $needHaspga: Boolean!) {\n  eventList(\n    QueryEvent: {depth: $depth, date: $date, ml: $ml, dateTime: $dateTime}\n    needHaspga: $needHaspga\n  ) {\n    DateUTC\n    Depth\n    Latitude\n    Longitude\n    ML\n    hasPGA @include(if: $needHaspga)\n  }\n}","variables":{"date":["%s","%s"],"ml":[0,10],"depth":[0,1000],"needHaspga":false}}`,
+					currentTime.AddDate(-1, 0, 0).Format("2006-01-02"),
+					currentTime.Format("2006-01-02"),
+				),
+				"application/json", 10*time.Second, time.Second, 3, false, nil,
+				map[string]string{
+					"User-Agent": uarand.GetRandom(),
+					"Referer":    "https://palert.earth.sinica.edu.tw/database",
+				},
+			)
+			if err != nil {
+				return nil, err
+			}
 
-	// Parse P-Alert JSON response
-	var dataMap map[string]any
-	err = json.Unmarshal(res, &dataMap)
-	if err != nil {
-		return nil, err
-	}
+			// Parse P-Alert JSON response
+			var dataMap map[string]any
+			err = json.Unmarshal(res, &dataMap)
+			if err != nil {
+				return nil, err
+			}
 
-	dataMapObj, ok := dataMap["data"].(map[string]any)
-	if !ok {
-		return nil, errors.New("seismic event data object is not available")
-	}
+			dataMapObj, ok := dataMap["data"].(map[string]any)
+			if !ok {
+				return nil, errors.New("seismic event data object is not available")
+			}
 
-	dataMapEvents, ok := dataMapObj["eventList"].([]any)
-	if !ok {
-		return nil, errors.New("seismic event data is not available")
-	}
+			dataMapEvents, ok := dataMapObj["eventList"].([]any)
+			if !ok {
+				return nil, errors.New("seismic event data is not available")
+			}
 
-	// Ensure the response has the expected keys and they are not empty
-	expectedKeys := []string{"DateUTC", "Depth", "Latitude", "Longitude", "ML"}
+			// Ensure the response has the expected keys and they are not empty
+			expectedKeys := []string{"DateUTC", "Depth", "Latitude", "Longitude", "ML"}
 
-	var resultArr []Event
-	for idx, v := range dataMapEvents {
-		event := v.(map[string]any)
+			var resultArr []Event
+			for idx, v := range dataMapEvents {
+				event := v.(map[string]any)
 
-		if !isMapHasKeys(event, expectedKeys) || !isMapKeysEmpty(event, expectedKeys) {
-			continue
-		}
+				if !isMapHasKeys(event, expectedKeys) || !isMapKeysEmpty(event, expectedKeys) {
+					continue
+				}
 
-		timestamp, err := c.getTimestamp(event["DateUTC"].(string))
+				timestamp, err := c.getTimestamp(event["DateUTC"].(string))
+				if err != nil {
+					continue
+				}
+
+				seisEvent := Event{
+					Verfied:   true,
+					Timestamp: timestamp,
+					Depth:     event["Depth"].(float64),
+					Event:     fmt.Sprintf("P-Alert#%d", idx),
+					Latitude:  event["Latitude"].(float64),
+					Longitude: event["Longitude"].(float64),
+					Magnitude: c.getMagnitude(event["ML"].(float64)),
+				}
+				seisEvent.Region = c.getRegion(seisEvent.Latitude, seisEvent.Longitude)
+				resultArr = append(resultArr, seisEvent)
+			}
+
+			sortedEvents := sortSeismicEvents(resultArr)
+			c.cache.Set(sortedEvents)
+			return sortedEvents, nil
+		})
 		if err != nil {
-			continue
+			return nil, err
 		}
 
-		seisEvent := Event{
-			Verfied:   true,
-			Timestamp: timestamp,
-			Depth:     event["Depth"].(float64),
-			Event:     fmt.Sprintf("P-Alert#%d", idx),
-			Latitude:  event["Latitude"].(float64),
-			Longitude: event["Longitude"].(float64),
-			Magnitude: c.getMagnitude(event["ML"].(float64)),
-		}
-
-		seisEvent.Region = c.getRegion(seisEvent.Latitude, seisEvent.Longitude)
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
-
-		resultArr = append(resultArr, seisEvent)
+		baseEvents = v.([]Event)
 	}
 
-	sortedEvents := sortSeismicEvents(resultArr)
-	c.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
+	}
+
+	return baseEvents, nil
 }
 
 func (c *PALERT) getMagnitude(data float64) []Magnitude {

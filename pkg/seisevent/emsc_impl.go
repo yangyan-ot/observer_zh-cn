@@ -7,48 +7,76 @@ import (
 	"github.com/anyshake/observer/pkg/request"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const EMSC_ID = "emsc"
 
 type EMSC struct {
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (c *EMSC) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      EMSC_ID,
 		Country: "EU",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "European-Mediterranean Seismological Centre",
 			"zh-TW": "歐洲與地中海地震中心",
-			"zh-CN": "欧洲与地中海地震中心",
 		},
 	}
 }
 
 func (c *EMSC) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
+
 	if c.cache.Valid() {
-		return c.cache.Get().([]Event), nil
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(EMSC_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
+			}
+
+			res, err := request.GET(
+				"https://www.seismicportal.eu/fdsnws/event/1/query?minmag=-1&format=text&limit=300&orderby=time",
+				10*time.Second, time.Second, 3, false, nil,
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, err
+			}
+
+			resultArr, err := ParseFdsnwsEvent(string(res), "2006-01-02T15:04:05")
+			if err != nil {
+				return nil, err
+			}
+
+			sortedEvents := sortSeismicEvents(resultArr)
+			c.cache.Set(sortedEvents)
+			return sortedEvents, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		baseEvents = v.([]Event)
 	}
 
-	res, err := request.GET(
-		"https://www.seismicportal.eu/fdsnws/event/1/query?minmag=-1&format=text&limit=300&orderby=time",
-		10*time.Second, time.Second, 3, false, nil,
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
 	}
 
-	resultArr, err := ParseFdsnwsEvent(c.travelTimeTable, string(res), "2006-01-02T15:04:05", latitude, longitude)
-	if err != nil {
-		return nil, err
-	}
-
-	sortedEvents := sortSeismicEvents(resultArr)
-	c.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	return baseEvents, nil
 }

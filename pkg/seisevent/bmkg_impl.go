@@ -12,6 +12,7 @@ import (
 	"github.com/anyshake/observer/pkg/request"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const BMKG_ID = "bmkg"
@@ -19,49 +20,76 @@ const BMKG_ID = "bmkg"
 type BMKG struct {
 	resolvers       dnsquery.Resolvers
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (c *BMKG) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      BMKG_ID,
 		Country: "ID",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "Meteorology, Climatology, and Geophysical Agency",
 			"zh-TW": "印度尼西亞氣象、氣候和地球物理局",
-			"zh-CN": "印度尼西亚气象、气候和地球物理局",
 		},
 	}
 }
 
 func (c *BMKG) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
+
 	if c.cache.Valid() {
-		return c.cache.Get().([]Event), nil
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(BMKG_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
+			}
+
+			res, err := request.GET(
+				"https://bmkg-content-inatews.storage.googleapis.com/last30feltevent.xml",
+				30*time.Second, time.Second, 3, false,
+				// Set custom frontend SNI (bmkg) to bypass GFW in China
+				createCustomTransport(c.resolvers, "bmkg"),
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, err
+			}
+
+			resultArr, err := c.parseXmlData(string(res))
+			if err != nil {
+				return nil, err
+			}
+
+			sorted := sortSeismicEvents(resultArr)
+			c.cache.Set(sorted)
+			return sorted, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		baseEvents = v.([]Event)
 	}
 
-	res, err := request.GET(
-		"https://bmkg-content-inatews.storage.googleapis.com/last30feltevent.xml",
-		30*time.Second, time.Second, 3, false,
-		// Set custom frontend SNI (bmkg) to bypass GFW in China
-		createCustomTransport(c.resolvers, "bmkg"),
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
 	}
 
-	resultArr, err := c.parseXmlData(string(res), latitude, longitude)
-	if err != nil {
-		return nil, err
-	}
-
-	sortedEvents := sortSeismicEvents(resultArr)
-	c.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	return baseEvents, nil
 }
 
-func (c *BMKG) parseXmlData(xmlData string, latitude, longitude float64) ([]Event, error) {
+func (c *BMKG) parseXmlData(xmlData string) ([]Event, error) {
 	decoder := xml.NewDecoder(strings.NewReader(xmlData))
 
 	var (
@@ -112,7 +140,8 @@ func (c *BMKG) parseXmlData(xmlData string, latitude, longitude float64) ([]Even
 		if err != nil {
 			return nil, err
 		}
-		seisEvent := Event{
+
+		events = append(events, Event{
 			Verfied:   true,
 			Event:     item["eventid"],
 			Region:    item["area"],
@@ -121,12 +150,7 @@ func (c *BMKG) parseXmlData(xmlData string, latitude, longitude float64) ([]Even
 			Depth:     c.getDepth(item["depth"]),
 			Magnitude: c.getMagnitude(item["magnitude"]),
 			Timestamp: timestamp,
-		}
-
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
-
-		events = append(events, seisEvent)
+		})
 	}
 
 	return events, nil

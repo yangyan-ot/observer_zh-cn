@@ -1,9 +1,13 @@
 package cache
 
-func (a *AnyCache) Get() any {
+func (a *GenericCache[T]) Get() T {
 	a.mutex.RLock()
 	defer a.mutex.RUnlock()
-	return a.cache
+	if a.cache == nil {
+		var zeroValue T
+		return zeroValue
+	}
+	return *a.cache
 }
 
 func (c *KvCache[T]) Get(key any) (T, bool) {

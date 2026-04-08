@@ -12,13 +12,15 @@ import (
 	"github.com/anyshake/observer/pkg/timesource"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const CENC_WEB_ID = "cenc_web"
 
 type CENC_WEB struct {
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 	timeSource      *timesource.Source
 }
 
@@ -26,11 +28,10 @@ func (c *CENC_WEB) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      CENC_WEB_ID,
 		Country: "CN",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "China Earthquake Networks Center (Web)",
 			"zh-TW": "中國地震台網中心（網頁端）",
-			"zh-CN": "中国地震台网中心（网页端）",
 		},
 	}
 }
@@ -42,75 +43,98 @@ func (c *CENC_WEB) getRequestParam(currentTime time.Time) string {
 }
 
 func (c *CENC_WEB) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
+
 	if c.cache.Valid() {
-		return c.cache.Get().([]Event), nil
-	}
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(CENC_WEB_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
+			}
 
-	res, err := request.GET(
-		fmt.Sprintf("https://www.cenc.ac.cn/prodlaunch-web-backend/open/data/geojson/catalogs?%s", c.getRequestParam(c.timeSource.Now())),
-		10*time.Second, time.Second, 3, false, nil,
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
-	}
+			res, err := request.GET(
+				fmt.Sprintf("https://www.cenc.ac.cn/prodlaunch-web-backend/open/data/geojson/catalogs?%s", c.getRequestParam(c.timeSource.Now())),
+				10*time.Second, time.Second, 3, false, nil,
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, err
+			}
 
-	// Parse CENC GeoJSON response
-	var dataMap map[string]any
-	err = json.Unmarshal(res, &dataMap)
-	if err != nil {
-		return nil, err
-	}
+			// Parse CENC GeoJSON response
+			var dataMap map[string]any
+			err = json.Unmarshal(res, &dataMap)
+			if err != nil {
+				return nil, err
+			}
 
-	dataMapEvents, ok := dataMap["features"].([]any)
-	if !ok {
-		return nil, errors.New("seismic event data is not available")
-	}
+			dataMapEvents, ok := dataMap["features"].([]any)
+			if !ok {
+				return nil, errors.New("seismic event data is not available")
+			}
 
-	// Ensure the response has the expected keys and values
-	expectedKeysInDataMap := []string{"properties", "geometry", "id"}
-	expectedKeysInProperties := []string{"震级", "参考位置", "发震时刻", "深度（千米）"}
-	expectedKeysInGeometry := []string{"coordinates"}
+			// Ensure the response has the expected keys and values
+			expectedKeysInDataMap := []string{"properties", "geometry", "id"}
+			expectedKeysInProperties := []string{"震级", "参考位置", "发震时刻", "深度（千米）"}
+			expectedKeysInGeometry := []string{"coordinates"}
 
-	var resultArr []Event
-	for _, event := range dataMapEvents {
-		if !isMapHasKeys(event.(map[string]any), expectedKeysInDataMap) {
-			continue
-		}
+			var resultArr []Event
+			for _, event := range dataMapEvents {
+				if !isMapHasKeys(event.(map[string]any), expectedKeysInDataMap) {
+					continue
+				}
 
-		var (
-			properties = event.(map[string]any)["properties"]
-			geometry   = event.(map[string]any)["geometry"]
-		)
-		if !isMapHasKeys(properties.(map[string]any), expectedKeysInProperties) || !isMapHasKeys(geometry.(map[string]any), expectedKeysInGeometry) {
-			continue
-		}
-		coordinates := geometry.(map[string]any)["coordinates"]
+				var (
+					properties = event.(map[string]any)["properties"]
+					geometry   = event.(map[string]any)["geometry"]
+				)
+				if !isMapHasKeys(properties.(map[string]any), expectedKeysInProperties) || !isMapHasKeys(geometry.(map[string]any), expectedKeysInGeometry) {
+					continue
+				}
+				coordinates := geometry.(map[string]any)["coordinates"]
 
-		ts, err := c.getTimestamp(properties.(map[string]any)["发震时刻"].(string))
+				ts, err := c.getTimestamp(properties.(map[string]any)["发震时刻"].(string))
+				if err != nil {
+					continue
+				}
+
+				resultArr = append(resultArr, Event{
+					Verfied:   true,
+					Timestamp: ts,
+					Depth:     c.getDepth(properties.(map[string]any)["深度（千米）"]),
+					Event:     event.(map[string]any)["id"].(string),
+					Region:    properties.(map[string]any)["参考位置"].(string),
+					Latitude:  coordinates.([]any)[1].(float64),
+					Longitude: coordinates.([]any)[0].(float64),
+					Magnitude: []Magnitude{c.getMagnitude("M", properties.(map[string]any)["震级"].(string))},
+				})
+			}
+
+			sortedEvents := sortSeismicEvents(resultArr)
+			c.cache.Set(sortedEvents)
+			return sortedEvents, nil
+		})
 		if err != nil {
-			continue
+			return nil, err
 		}
 
-		seisEvent := Event{
-			Verfied:   true,
-			Timestamp: ts,
-			Depth:     c.getDepth(properties.(map[string]any)["深度（千米）"]),
-			Event:     event.(map[string]any)["id"].(string),
-			Region:    properties.(map[string]any)["参考位置"].(string),
-			Latitude:  coordinates.([]any)[1].(float64),
-			Longitude: coordinates.([]any)[0].(float64),
-			Magnitude: []Magnitude{c.getMagnitude("M", properties.(map[string]any)["震级"].(string))},
-		}
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
-
-		resultArr = append(resultArr, seisEvent)
+		baseEvents = v.([]Event)
 	}
 
-	sortedEvents := sortSeismicEvents(resultArr)
-	c.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
+	}
+
+	return baseEvents, nil
 }
 
 func (c *CENC_WEB) getTimestamp(timeStr string) (int64, error) {

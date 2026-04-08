@@ -5,15 +5,15 @@ import (
 	"time"
 )
 
-type AnyCache struct {
-	cache     any
+type KvCache[T any] struct {
+	cache     map[any]T
 	ttl       time.Duration
 	createdAt time.Time
 	mutex     sync.RWMutex
 }
 
-type KvCache[T any] struct {
-	cache     map[any]T
+type GenericCache[T any] struct {
+	cache     *T
 	ttl       time.Duration
 	createdAt time.Time
 	mutex     sync.RWMutex

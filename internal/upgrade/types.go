@@ -19,8 +19,8 @@ type Helper struct {
 	currentBuild   *unibuild.UniBuild
 	currentVer     *semver.Version
 
-	latestVer   cache.AnyCache
-	requiredVer cache.AnyCache
+	latestVer   cache.GenericCache[*semver.Version]
+	requiredVer cache.GenericCache[*semver.Version]
 
 	appliedVer *semver.Version
 }

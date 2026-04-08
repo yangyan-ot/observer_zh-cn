@@ -9,77 +9,100 @@ import (
 	"github.com/anyshake/observer/pkg/request"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const KNDC_ID = "kndc"
 
 type KNDC struct {
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (c *KNDC) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      KNDC_ID,
 		Country: "KZ",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "Kazakhstan National Data Center",
 			"zh-TW": "哈薩克國家資料中心",
-			"zh-CN": "哈萨克国家数据中心",
 		},
 	}
 }
 
 func (c *KNDC) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
+
 	if c.cache.Valid() {
-		return c.cache.Get().([]Event), nil
-	}
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(KNDC_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
+			}
 
-	res, err := request.GET(
-		"https://kndc.kz/kndc/pagecontent/alarm-bulletin/getOriginList.php?orderby=epochtime&desc=yes&limit=100",
-		30*time.Second, time.Second, 3, false, nil,
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
-	}
+			res, err := request.GET(
+				"https://kndc.kz/kndc/pagecontent/alarm-bulletin/getOriginList.php?orderby=epochtime&desc=yes&limit=100",
+				30*time.Second, time.Second, 3, false, nil,
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, err
+			}
 
-	var dataMapEvents []map[string]any
-	err = json.Unmarshal(res, &dataMapEvents)
-	if err != nil {
-		return nil, err
-	}
+			var dataMapEvents []map[string]any
+			err = json.Unmarshal(res, &dataMapEvents)
+			if err != nil {
+				return nil, err
+			}
 
-	// Ensure the response has the expected keys and values
-	expectedKeys := []string{"id", "epochtime", "lat", "lon", "depth", "mb", "gregion", "sregion"}
+			// Ensure the response has the expected keys and values
+			expectedKeys := []string{"id", "epochtime", "lat", "lon", "depth", "mb", "gregion", "sregion"}
 
-	var resultArr []Event
-	for _, event := range dataMapEvents {
-		if !isMapHasKeys(event, expectedKeys) || !isMapKeysEmpty(event, expectedKeys) {
-			continue
+			var resultArr []Event
+			for _, event := range dataMapEvents {
+				if !isMapHasKeys(event, expectedKeys) || !isMapKeysEmpty(event, expectedKeys) {
+					continue
+				}
+
+				resultArr = append(resultArr, Event{
+					Verfied:   true,
+					Timestamp: int64(string2Float(event["epochtime"].(string))) * 1000,
+					Event:     event["id"].(string),
+					Depth:     event["depth"].(float64),
+					Latitude:  string2Float(event["lat"].(string)),
+					Longitude: string2Float(event["lon"].(string)),
+					Magnitude: c.getMagnitude(event["mb"].(float64)),
+					Region:    fmt.Sprintf("%s (%s)", event["gregion"].(string), event["sregion"].(string)),
+				})
+			}
+
+			sortedEvents := sortSeismicEvents(resultArr)
+			c.cache.Set(sortedEvents)
+			return sortedEvents, nil
+		})
+		if err != nil {
+			return nil, err
 		}
 
-		timestamp := int64(string2Float(event["epochtime"].(string))) * 1000
-		seisEvent := Event{
-			Verfied:   true,
-			Timestamp: timestamp,
-			Event:     event["id"].(string),
-			Depth:     event["depth"].(float64),
-			Latitude:  string2Float(event["lat"].(string)),
-			Longitude: string2Float(event["lon"].(string)),
-			Magnitude: c.getMagnitude(event["mb"].(float64)),
-			Region:    fmt.Sprintf("%s (%s)", event["gregion"].(string), event["sregion"].(string)),
-		}
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
-
-		resultArr = append(resultArr, seisEvent)
+		baseEvents = v.([]Event)
 	}
 
-	sortedEvents := sortSeismicEvents(resultArr)
-	c.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
+	}
+
+	return baseEvents, nil
 }
 
 func (c *KNDC) getMagnitude(data float64) []Magnitude {

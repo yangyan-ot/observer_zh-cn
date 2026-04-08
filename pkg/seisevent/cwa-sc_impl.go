@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/anyshake/observer/pkg/cache"
 	"github.com/anyshake/observer/pkg/dnsquery"
 	"github.com/anyshake/observer/pkg/request"
@@ -18,7 +20,8 @@ const CWA_SC_ID = "cwa_sc"
 type CWA_SC struct {
 	resolvers       dnsquery.Resolvers
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (c *CWA_SC) getRequestBody(limit int) string {
@@ -29,72 +32,92 @@ func (c *CWA_SC) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      CWA_SC_ID,
 		Country: "TW",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "Central Weather Administration Seismological Center",
 			"zh-TW": "交通部中央氣象署地震測報中心",
-			"zh-CN": "交通部中央气象署地震测报中心",
 		},
 	}
 }
 
 func (c *CWA_SC) GetEvents(latitude, longitude float64) ([]Event, error) {
-	// Get CWA HTML response
+	var baseEvents []Event
+
 	if c.cache.Valid() {
-		return c.cache.Get().([]Event), nil
-	}
+		baseEvents = c.cache.Get()
+	} else {
+		v, err, _ := c.sf.Do(CWA_SC_ID, func() (any, error) {
+			if c.cache.Valid() {
+				return c.cache.Get(), nil
+			}
 
-	res, err := request.POST(
-		"https://scweb.cwa.gov.tw/zh-tw/earthquake/ajaxhandler",
-		c.getRequestBody(100),
-		"application/x-www-form-urlencoded",
-		10*time.Second, time.Second, 3, false,
-		// Query CWA IP from custom encrypted DNS servers
-		createCustomTransport(c.resolvers, ""),
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
-	}
+			res, err := request.POST(
+				"https://scweb.cwa.gov.tw/zh-tw/earthquake/ajaxhandler",
+				c.getRequestBody(100),
+				"application/x-www-form-urlencoded",
+				10*time.Second, time.Second, 3, false,
+				// Query CWA IP from custom encrypted DNS servers
+				createCustomTransport(c.resolvers, ""),
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, err
+			}
 
-	// Parse CWA JSON response
-	var dataMap map[string]any
-	err = json.Unmarshal(res, &dataMap)
-	if err != nil {
-		return nil, err
-	}
+			// Parse CWA JSON response
+			var dataMap map[string]any
+			if err := json.Unmarshal(res, &dataMap); err != nil {
+				return nil, err
+			}
 
-	dataMapEvents, ok := dataMap["data"].([]any)
-	if !ok {
-		return nil, errors.New("seismic event data is not available")
-	}
+			dataMapEvents, ok := dataMap["data"].([]any)
+			if !ok {
+				return nil, errors.New("seismic event data is not available")
+			}
 
-	var resultArr []Event
-	for _, event := range dataMapEvents {
-		eventData := event.([]any)
-		if len(eventData) < 10 {
-			continue
+			var resultArr []Event
+			for _, event := range dataMapEvents {
+				eventData := event.([]any)
+				if len(eventData) < 10 {
+					continue
+				}
+
+				resultArr = append(resultArr, Event{
+					Verfied:   true,
+					Depth:     string2Float(eventData[4].(string)),
+					Event:     eventData[0].(string),
+					Region:    eventData[5].(string),
+					Latitude:  string2Float(eventData[8].(string)),
+					Longitude: string2Float(eventData[7].(string)),
+					Magnitude: c.getMagnitude(eventData[3].(string)),
+					Timestamp: c.getTimestamp(eventData[2].(string)),
+				})
+			}
+
+			sorted := sortSeismicEvents(resultArr)
+			c.cache.Set(sorted)
+			return sorted, nil
+		})
+		if err != nil {
+			return nil, err
 		}
 
-		seisEvent := Event{
-			Verfied:   true,
-			Depth:     string2Float(eventData[4].(string)),
-			Event:     eventData[0].(string),
-			Region:    eventData[5].(string),
-			Latitude:  string2Float(eventData[8].(string)),
-			Longitude: string2Float(eventData[7].(string)),
-			Magnitude: c.getMagnitude(eventData[3].(string)),
-			Timestamp: c.getTimestamp(eventData[2].(string)),
-		}
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(c.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
-
-		resultArr = append(resultArr, seisEvent)
+		baseEvents = v.([]Event)
 	}
 
-	sortedEvents := sortSeismicEvents(resultArr)
-	c.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			c.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
+	}
+
+	return baseEvents, nil
 }
 
 func (c *CWA_SC) getTimestamp(textValue string) int64 {

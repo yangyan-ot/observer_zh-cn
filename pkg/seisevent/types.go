@@ -28,7 +28,7 @@ type Event struct {
 type DataSourceProperty struct {
 	ID      string            `json:"id"`
 	Country string            `json:"country"` // ISO 3166-1 alpha-2 country code
-	Deafult string            `json:"default"` // default language key
+	Default string            `json:"default"` // default language key
 	Locales map[string]string `json:"locales"` // key: language, value: name
 }
 

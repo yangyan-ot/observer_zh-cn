@@ -9,84 +9,108 @@ import (
 	"github.com/anyshake/observer/pkg/request"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"golang.org/x/sync/singleflight"
 )
 
 const JMA_OFFICIAL_ID = "jma_official"
 
 type JMA_OFFICIAL struct {
 	travelTimeTable *travel.AK135
-	cache           cache.AnyCache
+	cache           cache.GenericCache[[]Event]
+	sf              singleflight.Group
 }
 
 func (j *JMA_OFFICIAL) GetProperty() DataSourceProperty {
 	return DataSourceProperty{
 		ID:      JMA_OFFICIAL_ID,
 		Country: "JP",
-		Deafult: "en-US",
+		Default: "en-US",
 		Locales: map[string]string{
 			"en-US": "Japan Meteorological Agency (Official)",
 			"zh-TW": "氣象廳（官方）",
-			"zh-CN": "气象厅（官方）",
 		},
 	}
 }
 
 func (j *JMA_OFFICIAL) GetEvents(latitude, longitude float64) ([]Event, error) {
+	var baseEvents []Event
+
 	if j.cache.Valid() {
-		return j.cache.Get().([]Event), nil
-	}
+		baseEvents = j.cache.Get()
+	} else {
+		v, err, _ := j.sf.Do(JMA_OFFICIAL_ID, func() (any, error) {
+			if j.cache.Valid() {
+				return j.cache.Get(), nil
+			}
 
-	res, err := request.GET(
-		"https://www.jma.go.jp/bosai/quake/data/list.json",
-		10*time.Second, time.Second, 3, false, nil,
-		map[string]string{"User-Agent": uarand.GetRandom()},
-	)
-	if err != nil {
-		return nil, err
-	}
+			res, err := request.GET(
+				"https://www.jma.go.jp/bosai/quake/data/list.json",
+				10*time.Second, time.Second, 3, false, nil,
+				map[string]string{"User-Agent": uarand.GetRandom()},
+			)
+			if err != nil {
+				return nil, err
+			}
 
-	// Parse JMA_OFFICIAL JSON response
-	var dataMapEvents []map[string]any
-	err = json.Unmarshal(res, &dataMapEvents)
-	if err != nil {
-		return nil, err
-	}
+			// Parse JMA_OFFICIAL JSON response
+			var dataMapEvents []map[string]any
+			err = json.Unmarshal(res, &dataMapEvents)
+			if err != nil {
+				return nil, err
+			}
 
-	// Ensure the response has the expected keys and values
-	expectedKeys := []string{"eid", "anm", "mag", "cod", "at"}
+			// Ensure the response has the expected keys and values
+			expectedKeys := []string{"eid", "anm", "mag", "cod", "at"}
 
-	var resultArr []Event
-	for _, event := range dataMapEvents {
-		if !isMapHasKeys(event, expectedKeys) || !isMapKeysEmpty(event, expectedKeys) {
-			continue
-		}
+			var resultArr []Event
+			for _, event := range dataMapEvents {
+				if !isMapHasKeys(event, expectedKeys) || !isMapKeysEmpty(event, expectedKeys) {
+					continue
+				}
 
-		// Second is the last 2 digits of the event ID
-		eventId := event["eid"].(string)
-		timestamp, err := j.getTimestamp(event["at"].(string), eventId[len(eventId)-2:])
+				// Second is the last 2 digits of the event ID
+				eventId := event["eid"].(string)
+				timestamp, err := j.getTimestamp(event["at"].(string), eventId[len(eventId)-2:])
+				if err != nil {
+					continue
+				}
+
+				resultArr = append(resultArr, Event{
+					Verfied:   true,
+					Timestamp: timestamp,
+					Depth:     j.getDepth(event["cod"].(string)),
+					Event:     eventId,
+					Region:    event["anm"].(string),
+					Latitude:  j.getLatitude(event["cod"].(string)),
+					Longitude: j.getLongitude(event["cod"].(string)),
+					Magnitude: j.getMagnitude(event["mag"].(string)),
+				})
+			}
+
+			sortedEvents := sortSeismicEvents(resultArr)
+			j.cache.Set(sortedEvents)
+			return sortedEvents, nil
+		})
 		if err != nil {
-			continue
+			return nil, err
 		}
 
-		seisEvent := Event{
-			Verfied:   true,
-			Timestamp: timestamp,
-			Depth:     j.getDepth(event["cod"].(string)),
-			Event:     eventId,
-			Region:    event["anm"].(string),
-			Latitude:  j.getLatitude(event["cod"].(string)),
-			Longitude: j.getLongitude(event["cod"].(string)),
-			Magnitude: j.getMagnitude(event["mag"].(string)),
-		}
-		seisEvent.Distance = getDistance(latitude, seisEvent.Latitude, longitude, seisEvent.Longitude)
-		seisEvent.Estimation = getSeismicEstimation(j.travelTimeTable, latitude, seisEvent.Latitude, longitude, seisEvent.Longitude, seisEvent.Depth)
-
-		resultArr = append(resultArr, seisEvent)
+		baseEvents = v.([]Event)
 	}
 
-	sortedEvents := sortSeismicEvents(resultArr)
-	j.cache.Set(sortedEvents)
-	return sortedEvents, nil
+	for i := range baseEvents {
+		baseEvents[i].Distance = getDistance(latitude, baseEvents[i].Latitude, longitude, baseEvents[i].Longitude)
+		baseEvents[i].Estimation = getSeismicEstimation(
+			j.travelTimeTable,
+			latitude,
+			baseEvents[i].Latitude,
+			longitude,
+			baseEvents[i].Longitude,
+			baseEvents[i].Depth,
+		)
+	}
+
+	return baseEvents, nil
 }
 
 func (j *JMA_OFFICIAL) getTimestamp(timeStr, secStr string) (int64, error) {

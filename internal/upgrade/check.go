@@ -14,14 +14,7 @@ import (
 
 func (u *Helper) CheckUpdate() (latest, required *semver.Version, eligible bool, applied bool, err error) {
 	if u.latestVer.Valid() && u.requiredVer.Valid() {
-		latest, ok := u.latestVer.Get().(*semver.Version)
-		if !ok {
-			return nil, nil, false, false, errors.New("cached latest version has invalid type")
-		}
-		required, ok := u.requiredVer.Get().(*semver.Version)
-		if !ok {
-			return nil, nil, false, false, errors.New("cached required version has invalid type")
-		}
+		latest, required := u.latestVer.Get(), u.requiredVer.Get()
 		if u.appliedVer != nil {
 			return latest, required, u.isEligibleForUpdate(latest, required), latest.Equal(u.appliedVer), nil
 		}

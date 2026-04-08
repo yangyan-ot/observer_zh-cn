@@ -658,7 +658,7 @@ func (r *queryResolver) GetEventSource(ctx context.Context) ([]*graph_model.Seis
 			Locales:       locales,
 			ID:            property.ID,
 			Country:       property.Country,
-			DefaultLocale: property.Deafult,
+			DefaultLocale: property.Default,
 		}
 	})
 
