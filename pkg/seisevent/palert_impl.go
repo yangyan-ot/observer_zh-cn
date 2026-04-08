@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/anyshake/observer/pkg/cache"
@@ -11,6 +12,9 @@ import (
 	"github.com/anyshake/observer/pkg/timesource"
 	"github.com/bclswl0827/travel"
 	"github.com/corpix/uarand"
+	"github.com/paulmach/orb"
+	"github.com/paulmach/orb/geojson"
+	"github.com/paulmach/orb/planar"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -44,6 +48,16 @@ func (c *PALERT) GetEvents(latitude, longitude float64) ([]Event, error) {
 		v, err, _ := c.sf.Do(PALERT_ID, func() (any, error) {
 			if c.cache.Valid() {
 				return c.cache.Get(), nil
+			}
+
+			// source: https://raw.githubusercontent.com/g0v/twgeojson/master/json/twCounty2010merge.topo.json
+			twCounty2010, err := getGeoJsonData("twCounty2010")
+			if err != nil {
+				return nil, err
+			}
+			featureCollection, err := geojson.UnmarshalFeatureCollection(twCounty2010)
+			if err != nil {
+				return nil, err
 			}
 
 			currentTime := c.timeSource.Now()
@@ -106,7 +120,7 @@ func (c *PALERT) GetEvents(latitude, longitude float64) ([]Event, error) {
 					Longitude: event["Longitude"].(float64),
 					Magnitude: c.getMagnitude(event["ML"].(float64)),
 				}
-				seisEvent.Region = c.getRegion(seisEvent.Latitude, seisEvent.Longitude)
+				seisEvent.Region = c.getRegion(featureCollection, seisEvent.Latitude, seisEvent.Longitude)
 				resultArr = append(resultArr, seisEvent)
 			}
 
@@ -140,8 +154,84 @@ func (c *PALERT) getMagnitude(data float64) []Magnitude {
 	return []Magnitude{{Type: ParseMagnitude("ML"), Value: data}}
 }
 
-func (c *PALERT) getRegion(latitude, longitude float64) string {
-	return fmt.Sprintf("Latitude: %.3f°, Longitude: %.3f°", latitude, longitude)
+func (c *PALERT) pointToSegmentDistance(p, a, b orb.Point) float64 {
+	px, py := p[0], p[1]
+	ax, ay := a[0], a[1]
+	bx, by := b[0], b[1]
+
+	dx := bx - ax
+	dy := by - ay
+
+	if dx == 0 && dy == 0 {
+		return math.Hypot(px-ax, py-ay)
+	}
+
+	t := ((px-ax)*dx + (py-ay)*dy) / (dx*dx + dy*dy)
+
+	if t < 0 {
+		return math.Hypot(px-ax, py-ay)
+	} else if t > 1 {
+		return math.Hypot(px-bx, py-by)
+	}
+
+	projX := ax + t*dx
+	projY := ay + t*dy
+
+	return math.Hypot(px-projX, py-projY)
+}
+
+func (c *PALERT) distanceToPolygon(p orb.Point, poly orb.Polygon) float64 {
+	min := math.MaxFloat64
+
+	for _, ring := range poly {
+		for i := 0; i < len(ring)-1; i++ {
+			d := c.pointToSegmentDistance(p, ring[i], ring[i+1])
+			if d < min {
+				min = d
+			}
+		}
+	}
+
+	return min
+}
+
+func (c *PALERT) getRegion(fc *geojson.FeatureCollection, latitude, longitude float64) string {
+	point := orb.Point{longitude, latitude}
+
+	var (
+		minDist    = math.MaxFloat64
+		nearestReg string
+	)
+
+	for _, feature := range fc.Features {
+		name := feature.Properties["COUNTYNAME"].(string)
+
+		switch geom := feature.Geometry.(type) {
+		case orb.Polygon:
+			if planar.PolygonContains(geom, point) {
+				return name
+			}
+			d := c.distanceToPolygon(point, geom)
+			if d < minDist {
+				minDist = d
+				nearestReg = name
+			}
+
+		case orb.MultiPolygon:
+			if planar.MultiPolygonContains(geom, point) {
+				return name
+			}
+			for _, poly := range geom {
+				d := c.distanceToPolygon(point, poly)
+				if d < minDist {
+					minDist = d
+					nearestReg = name
+				}
+			}
+		}
+	}
+
+	return fmt.Sprintf("%s（附近海域）", nearestReg)
 }
 
 func (c *PALERT) getTimestamp(textValue string) (int64, error) {

@@ -1,6 +1,8 @@
 package seisevent
 
 import (
+	"embed"
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -8,6 +10,13 @@ import (
 	"github.com/bclswl0827/travel"
 	"github.com/samber/lo"
 )
+
+//go:embed geojson/*.geojson
+var geojsonData embed.FS
+
+func getGeoJsonData(name string) ([]byte, error) {
+	return geojsonData.ReadFile(fmt.Sprintf("geojson/%s.geojson", name))
+}
 
 func string2Float(num string) float64 {
 	r, err := strconv.ParseFloat(num, 64)

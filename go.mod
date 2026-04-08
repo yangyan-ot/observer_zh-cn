@@ -40,6 +40,7 @@ require (
 	github.com/miekg/dns v1.1.65
 	github.com/ncruces/go-sqlite3 v0.24.0
 	github.com/ncruces/go-sqlite3/gormlite v0.24.0
+	github.com/paulmach/orb v0.13.0
 	github.com/rs/zerolog v1.35.0
 	github.com/samber/lo v1.51.0
 	github.com/sbabiv/xml2map v1.2.1
@@ -171,6 +172,7 @@ require (
 	github.com/vishvananda/netns v0.0.4 // indirect
 	github.com/xtaci/kcp-go/v5 v5.6.13 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
+	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.35.0 // indirect
 	go.opentelemetry.io/otel/metric v1.35.0 // indirect
