@@ -11,6 +11,7 @@ import {
 import Icon from '@mdi/react';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router-dom';
 
 import { Skeleton } from '../../components/ui/Skeleton';
 import { IRouterComponent } from '../../config/router';
@@ -26,6 +27,8 @@ import { Users } from './users';
 
 const Settings = ({ currentLocale }: IRouterComponent) => {
     const { t } = useTranslation();
+    const [searchParams, setSearchParams] = useSearchParams();
+
     const tabs = useMemo(() => {
         return {
             inventory: {
@@ -78,7 +81,12 @@ const Settings = ({ currentLocale }: IRouterComponent) => {
             }
         };
     }, [t, currentLocale]);
-    const [activeTab, setActiveTab] = useState(Object.keys(tabs)[0]);
+    const [activeTab, setActiveTab] = useState(searchParams.get('tab') ?? Object.keys(tabs)[0]);
+    useEffect(() => {
+        if (activeTab) {
+            setSearchParams({ tab: activeTab });
+        }
+    }, [activeTab, setSearchParams]);
 
     const [isAdmin, setIsAdmin] = useState(false);
     const { data: isCurrentUserAdminData, loading: isCurrentUserAdminLoading } =
