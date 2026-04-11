@@ -81,7 +81,16 @@ const Settings = ({ currentLocale }: IRouterComponent) => {
             }
         };
     }, [t, currentLocale]);
-    const [activeTab, setActiveTab] = useState(searchParams.get('tab') ?? Object.keys(tabs)[0]);
+    const [activeTab, setActiveTab] = useState(
+        (() => {
+            const tabFromUrl = searchParams.get('tab');
+            const availableTabs = Object.keys(tabs);
+            if (tabFromUrl && availableTabs.includes(tabFromUrl)) {
+                return tabFromUrl;
+            }
+            return availableTabs[0];
+        })()
+    );
     useEffect(() => {
         if (activeTab) {
             setSearchParams({ tab: activeTab });
