@@ -22,7 +22,7 @@ export const List = ({ data, onClick, className }: IList) => {
                     className={`border-base-200 border-b last:border-b-0 ${onClick ? 'cursor-pointer' : ''}`}
                 >
                     <div className="hover:bg-base-200 flex items-center justify-between px-4 py-3">
-                        <div className="flex items-center space-x-3 pr-6">{primary}</div>
+                        <div className="flex items-center pr-6">{primary}</div>
                         <div>{secondary}</div>
                     </div>
                 </li>

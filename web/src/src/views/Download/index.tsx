@@ -9,13 +9,13 @@ import { useTranslation } from 'react-i18next';
 
 import { Card } from '../../components/widget/Card';
 import { TableList } from '../../components/widget/TableList';
+import { DownloadConstraints } from '../../config/constraints';
 import { IRouterComponent } from '../../config/router';
 import { useGetFileListDataQuery } from '../../graphql';
 import { sendPromiseAlert } from '../../helpers/alert/sendPromiseAlert';
 import { getRestfulApiUrl } from '../../helpers/app/getRestfulApiUrl';
 import { ApiClient } from '../../helpers/request/ApiClient';
 import { getTimeString } from '../../helpers/utils/getTimeString';
-import { DownloadConstraints } from '../../config/constraints';
 
 const Download = ({ currentLocale }: IRouterComponent) => {
     const { t } = useTranslation();

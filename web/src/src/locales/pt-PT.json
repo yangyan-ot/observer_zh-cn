@@ -22,7 +22,9 @@
             "yes": "Sim",
             "no": "Não",
             "add_new_item": "Inserir novo item.",
-            "editing_list": "A editar Lista de {{fieldName}}"
+            "editing_list": "A editar Lista de {{fieldName}}",
+            "table_value": "Valor",
+            "table_actions": "Ações"
         },
         "Spectrogram": {
             "settings": {

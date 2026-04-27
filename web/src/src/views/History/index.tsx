@@ -93,15 +93,18 @@ const History = ({ currentLocale }: IRouterComponent) => {
     }>();
     const [isSelectModalOpen, setIsSelectModalOpen] = useState(false);
     const [seismicEventsData, setSeismicEventsData] = useState<
-        Array<{
-            id: string;
-            region: string;
-            timestamp: number;
-            estimation: number[];
-            primary: ReactNode | ReactNode[];
-            secondary: ReactNode | ReactNode[];
-        }>
-    >([]);
+        Record<
+            string,
+            {
+                id: string;
+                region: string;
+                timestamp: number;
+                estimation: number[];
+                primary: ReactNode | ReactNode[];
+                secondary: ReactNode | ReactNode[];
+            }
+        >
+    >({});
     const handleSearchEvents = useCallback(async () => {
         const requestFn = async () => {
             setIsBusy(true);
@@ -122,68 +125,81 @@ const History = ({ currentLocale }: IRouterComponent) => {
             t('views.History.search_events.searching'),
             (data) => {
                 setSeismicEventsData(
-                    (data ? [...data] : [])
-                        .sort((a, b) => b.timestamp - a.timestamp)
-                        .map((item) => ({
-                            id: item.eventId,
-                            region: item.region,
-                            timestamp: item.timestamp,
-                            estimation: item.estimation,
-                            primary: (
-                                <div className="space-y-2">
-                                    <h3 className="font-semibold text-gray-700">{item.region}</h3>
-                                    <ul className="list-inside list-disc whitespace-nowrap text-gray-500">
-                                        <li>
-                                            {t('views.History.event_list_modal.earthquake_at', {
-                                                time: getTimeString(item.timestamp)
-                                            })}
-                                        </li>
-                                        <li>
-                                            {t('views.History.event_list_modal.p_wave_arrival', {
-                                                time: getTimeString(
-                                                    item.timestamp + item.estimation[0] * 1000
-                                                ),
-                                                seconds: item.estimation[0].toFixed(1)
-                                            })}
-                                        </li>
-                                        <li>
-                                            {t('views.History.event_list_modal.s_wave_arrival', {
-                                                time: getTimeString(
-                                                    item.timestamp + item.estimation[1] * 1000
-                                                ),
-                                                seconds: item.estimation[1].toFixed(1)
-                                            })}
-                                        </li>
-                                        <li>
-                                            {t(
-                                                'views.History.event_list_modal.epicenter_distance',
-                                                { distance: item.distance.toFixed(1) }
-                                            )}
-                                        </li>
-                                        {item.depth !== -1 && (
+                    (data ? [...data] : []).reduce(
+                        (
+                            acc,
+                            { eventId, region, timestamp, estimation, depth, distance, magnitude }
+                        ) => {
+                            acc[eventId] = {
+                                id: eventId,
+                                region,
+                                timestamp,
+                                estimation,
+                                primary: (
+                                    <div className="space-y-2">
+                                        <h3 className="font-semibold text-gray-700">{region}</h3>
+                                        <ul className="list-inside list-disc whitespace-nowrap text-gray-500">
+                                            <li>
+                                                {t('views.History.event_list_modal.earthquake_at', {
+                                                    time: getTimeString(timestamp)
+                                                })}
+                                            </li>
                                             <li>
                                                 {t(
-                                                    'views.History.event_list_modal.earthquake_depth',
-                                                    { depth: item.depth.toFixed(1) }
+                                                    'views.History.event_list_modal.p_wave_arrival',
+                                                    {
+                                                        time: getTimeString(
+                                                            timestamp + estimation[0] * 1000
+                                                        ),
+                                                        seconds: estimation[0].toFixed(1)
+                                                    }
                                                 )}
                                             </li>
-                                        )}
-                                    </ul>
-                                </div>
-                            ),
-                            secondary: (
-                                <div className="flex flex-wrap gap-2 font-medium">
-                                    {Object.keys(item.magnitude).map((key, index) => (
-                                        <div
-                                            key={`${index}-${key}`}
-                                            className="badge badge-soft badge-secondary whitespace-nowrap"
-                                        >
-                                            {`${key} ${item.magnitude[key].toFixed(1)}`}
-                                        </div>
-                                    ))}
-                                </div>
-                            )
-                        })) ?? []
+                                            <li>
+                                                {t(
+                                                    'views.History.event_list_modal.s_wave_arrival',
+                                                    {
+                                                        time: getTimeString(
+                                                            timestamp + estimation[1] * 1000
+                                                        ),
+                                                        seconds: estimation[1].toFixed(1)
+                                                    }
+                                                )}
+                                            </li>
+                                            <li>
+                                                {t(
+                                                    'views.History.event_list_modal.epicenter_distance',
+                                                    { distance: distance.toFixed(1) }
+                                                )}
+                                            </li>
+                                            {depth !== -1 && (
+                                                <li>
+                                                    {t(
+                                                        'views.History.event_list_modal.earthquake_depth',
+                                                        { depth: depth.toFixed(1) }
+                                                    )}
+                                                </li>
+                                            )}
+                                        </ul>
+                                    </div>
+                                ),
+                                secondary: (
+                                    <div className="mx-4 flex flex-wrap font-medium">
+                                        {Object.keys(magnitude).map((key, index) => (
+                                            <div
+                                                key={`${index}-${key}`}
+                                                className="badge badge-soft badge-secondary whitespace-nowrap"
+                                            >
+                                                {`${key} ${magnitude[key].toFixed(1)}`}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )
+                            };
+                            return acc;
+                        },
+                        {} as Record<string, (typeof seismicEventsData)[string]>
+                    )
                 );
                 setIsSelectModalOpen(true);
                 return t('views.History.search_events.success', { count: data.length });
@@ -193,7 +209,7 @@ const History = ({ currentLocale }: IRouterComponent) => {
     }, [t, getSeismicEventBySource, selectedSeismicEventSource]);
     const handleChooseEvent = useCallback(
         (eventId: string) => {
-            const selectedEvent = seismicEventsData.find((item) => item.id === eventId);
+            const selectedEvent = seismicEventsData[eventId];
             if (selectedEvent) {
                 const { timestamp, estimation, region } = selectedEvent;
                 const [pWave, sWave] = estimation;
@@ -859,14 +875,15 @@ const History = ({ currentLocale }: IRouterComponent) => {
                         </div>
                     </div>
                 }
-                enlarge={true}
                 open={isSelectModalOpen}
                 onClose={() => setIsSelectModalOpen(false)}
             >
                 <List
                     className="overflow-y-scroll"
                     onClick={(id) => handleChooseEvent(id)}
-                    data={seismicEventsData}
+                    data={Object.values(seismicEventsData).sort(
+                        (a, b) => b.timestamp - a.timestamp
+                    )}
                 />
             </DialogModal>
         </div>

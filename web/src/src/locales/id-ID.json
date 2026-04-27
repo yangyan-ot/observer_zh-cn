@@ -22,7 +22,9 @@
             "yes": "Ya",
             "no": "Tidak",
             "add_new_item": "Masukkan item baru.",
-            "editing_list": "Mengedit Daftar {{fieldName}}"
+            "editing_list": "Mengedit Daftar {{fieldName}}",
+            "table_value": "Nilai",
+            "table_actions": "Tindakan"
         },
         "Spectrogram": {
             "settings": {

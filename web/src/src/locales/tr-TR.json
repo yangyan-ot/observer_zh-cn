@@ -22,7 +22,9 @@
             "yes": "Evet",
             "no": "Hayır",
             "add_new_item": "Yeni öğe girin.",
-            "editing_list": "{{fieldName}} Listesi Düzenleniyor"
+            "editing_list": "{{fieldName}} Listesi Düzenleniyor",
+            "table_value": "Değer",
+            "table_actions": "İşlemler"
         },
         "Spectrogram": {
             "settings": {

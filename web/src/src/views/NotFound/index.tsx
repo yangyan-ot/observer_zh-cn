@@ -1,7 +1,7 @@
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { ErrorPage } from '../../components/ui/ErrorPage';
-import { useCallback } from 'react';
 
 const NotFound = () => {
     const { t } = useTranslation();

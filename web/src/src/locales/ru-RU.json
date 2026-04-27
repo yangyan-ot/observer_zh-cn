@@ -22,7 +22,9 @@
             "yes": "Да",
             "no": "Нет",
             "add_new_item": "Введите новый элемент.",
-            "editing_list": "Редактирование списка {{fieldName}}"
+            "editing_list": "Редактирование списка {{fieldName}}",
+            "table_value": "Значение",
+            "table_actions": "Действия"
         },
         "Spectrogram": {
             "settings": {

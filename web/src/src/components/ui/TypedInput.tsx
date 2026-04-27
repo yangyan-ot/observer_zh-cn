@@ -208,53 +208,75 @@ export const TypedInput = ({
                             <Icon className="flex-shrink-0" path={mdiPlus} size={0.9} />
                         </button>
                     </div>
-                    <ul
-                        className={`mt-6 ${dataType.startsWith('string') ? 'list-decimal' : 'list-disc'} space-y-2 px-4`}
-                    >
-                        {value.map((item: unknown, idx: number) => (
-                            <li key={idx}>
-                                <div className="flex flex-col items-center gap-2 sm:flex-row sm:justify-between">
-                                    <span className="w-full break-words select-none sm:max-w-2/3">
-                                        {String(item)}
-                                    </span>
-                                    <div className="flex gap-2">
-                                        <button
-                                            className="cursor-pointer text-gray-500 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-300"
-                                            onClick={() => handleUpdateArrayItem(idx, 'up')}
-                                            disabled={idx === 0}
-                                        >
-                                            <Icon
-                                                className="flex-shrink-0"
-                                                path={mdiMenuUp}
-                                                size={0.9}
-                                            />
-                                        </button>
-                                        <button
-                                            className="cursor-pointer text-gray-500 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-300"
-                                            onClick={() => handleUpdateArrayItem(idx, 'down')}
-                                            disabled={idx === value.length - 1}
-                                        >
-                                            <Icon
-                                                className="flex-shrink-0"
-                                                path={mdiMenuDown}
-                                                size={0.9}
-                                            />
-                                        </button>
-                                        <button
-                                            className="cursor-pointer text-gray-500 hover:text-gray-700"
-                                            onClick={() => handleRemoveArrayItem(idx)}
-                                        >
-                                            <Icon
-                                                className="flex-shrink-0"
-                                                path={mdiDelete}
-                                                size={0.9}
-                                            />
-                                        </button>
-                                    </div>
-                                </div>
-                            </li>
-                        ))}
-                    </ul>
+                    <div className="mt-6 overflow-x-auto rounded border border-gray-200">
+                        <table className="w-full text-sm">
+                            <thead className="bg-gray-50">
+                                <tr>
+                                    <th className="w-10 px-3 py-2 text-left text-xs font-medium tracking-wide text-gray-500 uppercase">
+                                        #
+                                    </th>
+                                    <th className="px-3 py-2 text-left text-xs font-medium tracking-wide text-gray-500 uppercase">
+                                        {t('components.TypedInput.table_value')}
+                                    </th>
+                                    <th className="px-3 py-2 text-right text-xs font-medium tracking-wide text-gray-500 uppercase">
+                                        {t('components.TypedInput.table_actions')}
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 font-mono text-xs">
+                                {value.map((item: unknown, idx: number) => (
+                                    <tr key={idx} className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 align-middle text-gray-400 tabular-nums">
+                                            {idx + 1}
+                                        </td>
+                                        <td className="w-full max-w-0 px-3 py-2 align-middle">
+                                            <span className="block break-words select-none">
+                                                {String(item)}
+                                            </span>
+                                        </td>
+                                        <td className="px-3 py-2 align-middle">
+                                            <div className="flex justify-end gap-1">
+                                                <button
+                                                    className="cursor-pointer text-gray-500 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-300"
+                                                    onClick={() => handleUpdateArrayItem(idx, 'up')}
+                                                    disabled={idx === 0}
+                                                >
+                                                    <Icon
+                                                        className="flex-shrink-0"
+                                                        path={mdiMenuUp}
+                                                        size={0.9}
+                                                    />
+                                                </button>
+                                                <button
+                                                    className="cursor-pointer text-gray-500 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-300"
+                                                    onClick={() =>
+                                                        handleUpdateArrayItem(idx, 'down')
+                                                    }
+                                                    disabled={idx === value.length - 1}
+                                                >
+                                                    <Icon
+                                                        className="flex-shrink-0"
+                                                        path={mdiMenuDown}
+                                                        size={0.9}
+                                                    />
+                                                </button>
+                                                <button
+                                                    className="cursor-pointer text-gray-500 hover:text-gray-700"
+                                                    onClick={() => handleRemoveArrayItem(idx)}
+                                                >
+                                                    <Icon
+                                                        className="flex-shrink-0"
+                                                        path={mdiDelete}
+                                                        size={0.9}
+                                                    />
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </DialogModal>
             )}
         </>

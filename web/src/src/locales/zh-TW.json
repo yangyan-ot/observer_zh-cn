@@ -22,7 +22,9 @@
             "yes": "是",
             "no": "否",
             "add_new_item": "輸入新項目。",
-            "editing_list": "編輯 {{fieldName}} 列表"
+            "editing_list": "編輯 {{fieldName}} 列表",
+            "table_value": "內容",
+            "table_actions": "操作"
         },
         "Spectrogram": {
             "settings": {

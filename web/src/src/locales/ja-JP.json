@@ -22,7 +22,9 @@
             "yes": "はい",
             "no": "いいえ",
             "add_new_item": "新しい項目を入力してください。",
-            "editing_list": "{{fieldName}} のリストを編集中"
+            "editing_list": "{{fieldName}} のリストを編集中",
+            "table_value": "値",
+            "table_actions": "操作"
         },
         "Spectrogram": {
             "settings": {
