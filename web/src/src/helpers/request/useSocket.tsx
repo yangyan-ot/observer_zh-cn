@@ -6,6 +6,11 @@ export const useSocket = (options: ISocket, reconnect: boolean) => {
     const optionsRef = useRef<ISocket | null>(options);
     const socketRef = useRef<WebSocket | null>(null);
     const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const mountedRef = useRef(true);
+
+    useEffect(() => {
+        optionsRef.current = options;
+    }, [options]);
 
     const [readyState, setReadyState] = useState<WebSocket['readyState']>(WebSocket.CONNECTING);
 
@@ -16,8 +21,10 @@ export const useSocket = (options: ISocket, reconnect: boolean) => {
     }, []);
 
     useEffect(() => {
-        const connect = () => {
-            if (!optionsRef.current || socketRef.current) {
+        mountedRef.current = true;
+
+        const doConnect = () => {
+            if (!optionsRef.current || socketRef.current || !mountedRef.current) {
                 return;
             }
 
@@ -25,14 +32,14 @@ export const useSocket = (options: ISocket, reconnect: boolean) => {
                 ...optionsRef.current,
                 onClose: (e) => {
                     optionsRef.current?.onClose?.(e);
-                    setReadyState(WebSocket.CLOSED); // Update readyState on close
-                    if (reconnect) {
+                    setReadyState(WebSocket.CLOSED);
+                    if (reconnect && mountedRef.current) {
                         if (reconnectTimeoutRef.current) {
                             clearTimeout(reconnectTimeoutRef.current);
                         }
                         reconnectTimeoutRef.current = setTimeout(() => {
                             socketRef.current = null;
-                            connect();
+                            doConnect();
                         }, 1000);
                     } else {
                         socketRef.current = null;
@@ -40,21 +47,21 @@ export const useSocket = (options: ISocket, reconnect: boolean) => {
                 },
                 onError: (e) => {
                     optionsRef.current?.onError?.(e);
-                    setReadyState(WebSocket.CLOSED); // Update readyState on error
-                    if (reconnect) {
+                    setReadyState(WebSocket.CLOSED);
+                    if (reconnect && mountedRef.current) {
                         if (reconnectTimeoutRef.current) {
                             clearTimeout(reconnectTimeoutRef.current);
                         }
                         reconnectTimeoutRef.current = setTimeout(() => {
                             socketRef.current = null;
-                            connect();
+                            doConnect();
                         }, 1000);
                     } else {
                         socketRef.current = null;
                     }
                 },
                 onOpen: () => {
-                    setReadyState(WebSocket.OPEN); // Update readyState on open
+                    setReadyState(WebSocket.OPEN);
                 },
                 onData: (data) => {
                     optionsRef.current?.onData?.(data);
@@ -62,14 +69,14 @@ export const useSocket = (options: ISocket, reconnect: boolean) => {
             });
         };
 
-        connect();
+        doConnect();
 
         return () => {
+            mountedRef.current = false;
             if (reconnectTimeoutRef.current) {
                 clearTimeout(reconnectTimeoutRef.current);
             }
             socketRef.current?.close();
-            optionsRef.current = null;
             socketRef.current = null;
         };
     }, [reconnect]);

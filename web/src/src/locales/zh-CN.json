@@ -222,7 +222,7 @@
                 "no_data_recorded": "此期间内未录制任何数据。"
             },
             "connectivity": {
-                "connecting": "没有连线，正在尝试连接...",
+                "connecting": "没有数据，正在尝试连接...",
                 "connected": "已连接，最后更新于 {{updatedAt}}。"
             },
             "stream_status": {
