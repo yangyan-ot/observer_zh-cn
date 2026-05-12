@@ -96,7 +96,6 @@ const RealTime = () => {
 
     const { readyState, sendMessage } = useSocket(
         {
-            protocols: [`Bearer#${getCredential().token.replace(/=/g, '')}`],
             url: getSocketApiUrl(),
             onData: ({ data }) => {
                 const { channel_data, sample_rate, record_time, current_time } = data;
@@ -132,9 +131,10 @@ const RealTime = () => {
     );
     useEffect(() => {
         if (readyState === 1) {
+            sendMessage(getCredential().token);
             sendMessage('client hello');
         }
-    }, [readyState, sendMessage]);
+    }, [readyState, sendMessage, getCredential]);
 
     const getInitialLayout = useCallback(
         (id: string, index: number) => {

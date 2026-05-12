@@ -6,7 +6,6 @@ import (
 
 	"github.com/anyshake/observer/internal/hardware"
 	"github.com/anyshake/observer/internal/hardware/explorer"
-	"github.com/anyshake/observer/internal/server/middleware/auth_jwt"
 	"github.com/anyshake/observer/internal/server/response"
 	"github.com/anyshake/observer/pkg/logger"
 	"github.com/anyshake/observer/pkg/message"
@@ -18,15 +17,16 @@ import (
 
 func Setup(routerGroup *gin.RouterGroup, timeSource *timesource.Source, hardware hardware.IHardware, jwtMiddleware gin.HandlerFunc) {
 	s := socket{
-		messageBus:    message.NewBus[explorer.EventHandler](LOG_PREFIX, 65535),
-		historyBuffer: make([]buffer, 0, HISTORY_BUFFER_SIZE),
+		messageBus:     message.NewBus[explorer.EventHandler](LOG_PREFIX, 65535),
+		historyBuffer:  make([]buffer, 0, HISTORY_BUFFER_SIZE),
+		tokenValidator: newTokenValidator(jwtMiddleware),
 	}
 	hardware.Subscribe(LOG_PREFIX, func(t time.Time, di *explorer.DeviceConfig, dv *explorer.DeviceVariable, cd []explorer.ChannelData) {
 		s.messageBus.Publish(t, di, dv, cd)
 		s.storeHistory(t, di, cd)
 	})
 
-	routerGroup.GET("/socket", auth_jwt.NewWebsocketAuthAdapter(), jwtMiddleware, func(ctx *gin.Context) {
+	routerGroup.GET("/socket", func(ctx *gin.Context) {
 		upgrader := websocket.Upgrader{
 			ReadBufferSize:    1024,
 			WriteBufferSize:   1024,
@@ -91,8 +91,22 @@ func (s *socket) sendHistory(conn *websocket.Conn, timeSource *timesource.Source
 
 func (s *socket) handleWebSocket(_ *gin.Context, conn *websocket.Conn, timeSource *timesource.Source) {
 	clientID := conn.RemoteAddr().String()
+	logger.GetLogger(LOG_PREFIX).Infof("%s - client connected, waiting for authentication", clientID)
+
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, tokenBytes, err := conn.ReadMessage()
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		logger.GetLogger(LOG_PREFIX).Warnf("%s - authentication timeout or read error: %v", clientID, err)
+		return
+	}
+	if !s.tokenValidator(string(tokenBytes)) {
+		logger.GetLogger(LOG_PREFIX).Warnf("%s - authentication failed", clientID)
+		return
+	}
+
 	subscribedAt := time.Now()
-	logger.GetLogger(LOG_PREFIX).Infof("%s - client subscribed to message bus", clientID)
+	logger.GetLogger(LOG_PREFIX).Infof("%s - authenticated and subscribed to message bus", clientID)
 
 	callbackFn := func(t time.Time, di *explorer.DeviceConfig, dv *explorer.DeviceVariable, cd []explorer.ChannelData) {
 		data := map[string]any{
