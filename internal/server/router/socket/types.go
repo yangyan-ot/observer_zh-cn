@@ -18,7 +18,8 @@ type buffer struct {
 }
 
 type socket struct {
-	mu            sync.Mutex
-	messageBus    message.Bus[explorer.EventHandler]
-	historyBuffer []buffer
+	mu             sync.Mutex
+	messageBus     message.Bus[explorer.EventHandler]
+	tokenValidator func(string) bool
+	historyBuffer  []buffer
 }
